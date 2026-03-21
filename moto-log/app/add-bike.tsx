@@ -76,7 +76,7 @@ export default function AddBikeScreen() {
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
         enableOnAndroid={true}
-        extraScrollHeight={20}
+        extraScrollHeight={120}
       >
         <Text style={styles.label}>NICKNAME (Optional)</Text>
         <View style={styles.inputContainer}>

@@ -137,7 +137,7 @@ export default function EditBikeScreen() {
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
         enableOnAndroid={true}
-        extraScrollHeight={20}
+        extraScrollHeight={120}
         enableAutomaticScroll={true}
       >
         <Text style={styles.label}>NICKNAME (Optional)</Text>

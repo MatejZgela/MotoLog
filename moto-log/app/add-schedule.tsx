@@ -105,7 +105,7 @@ export default function AddScheduleScreen() {
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
         enableOnAndroid={true}
-        extraScrollHeight={20}
+        extraScrollHeight={0}
       >
         <Text style={styles.headerText}>SET INTERVAL</Text>
         <Text style={styles.subText}>Define when this task should be performed next.</Text>

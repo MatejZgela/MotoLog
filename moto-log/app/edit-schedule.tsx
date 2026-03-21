@@ -106,7 +106,7 @@ export default function EditScheduleScreen() {
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
         enableOnAndroid={true}
-        extraScrollHeight={20}
+        extraScrollHeight={0}
       >
         <Text style={styles.headerText}>UPDATE INTERVAL</Text>
         <Text style={styles.subText}>Adjust when this task should be performed next.</Text>

@@ -225,7 +225,7 @@ export default function EditLogScreen() {
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
         enableOnAndroid={true}
-        extraScrollHeight={20}
+        extraScrollHeight={120}
       >
         <Text style={styles.label}>MAINTENANCE CATEGORY</Text>
         <View style={styles.pickerContainer}>
