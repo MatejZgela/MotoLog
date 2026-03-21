@@ -7,14 +7,13 @@ import {
   TouchableOpacity,
   Alert,
   ActivityIndicator,
-  KeyboardAvoidingView,
-  ScrollView,
   Platform,
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { supabase } from '../lib/supabase';
 import { useSettings } from '../context/SettingsContext';
 import { Ionicons } from '@expo/vector-icons';
+import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 
 export default function EditBikeScreen() {
   const router = useRouter();
@@ -96,13 +95,11 @@ export default function EditBikeScreen() {
             try {
               setIsSubmitting(true);
 
-              // 1. Fetch all logs for this bike
               const { data: logs } = await supabase
                 .from('maintenance_logs')
                 .select('image_before_url, image_after_url, receipt_image_url')
                 .eq('motorcycle_id', bikeId);
 
-              // 2. Collect all valid image URLs
               let fileNames: string[] = [];
               if (logs) {
                 logs.forEach((log) => {
@@ -113,12 +110,10 @@ export default function EditBikeScreen() {
                 });
               }
 
-              // 3. Delete all photos from Supabase Storage
               if (fileNames.length > 0) {
                 await supabase.storage.from('maintenance-photos').remove(fileNames);
               }
 
-              // 4. Delete the bike (Database automatically cascades to logs/schedules)
               await supabase.from('motorcycles').delete().eq('id', bikeId);
               router.replace('/');
             } catch (error: any) {
@@ -136,15 +131,14 @@ export default function EditBikeScreen() {
   }
 
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      keyboardVerticalOffset={Platform.OS === 'ios' ? 80 : 0}
-    >
-      <ScrollView
+    <View style={styles.container}>
+      <KeyboardAwareScrollView
         contentContainerStyle={{ paddingBottom: 120 }}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
+        enableOnAndroid={true}
+        extraScrollHeight={20}
+        enableAutomaticScroll={true}
       >
         <Text style={styles.label}>NICKNAME (Optional)</Text>
         <View style={styles.inputContainer}>
@@ -207,7 +201,7 @@ export default function EditBikeScreen() {
           <Ionicons name="trash-outline" size={18} color="#ff4444" style={{ marginRight: 8 }} />
           <Text style={styles.deleteText}>DELETE MOTORCYCLE</Text>
         </TouchableOpacity>
-      </ScrollView>
+      </KeyboardAwareScrollView>
 
       <TouchableOpacity
         style={[styles.floatingButton, isSubmitting && { opacity: 0.7 }]}
@@ -220,7 +214,7 @@ export default function EditBikeScreen() {
           <Text style={styles.floatingButtonText}>SAVE CHANGES</Text>
         )}
       </TouchableOpacity>
-    </KeyboardAvoidingView>
+    </View>
   );
 }
 

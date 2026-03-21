@@ -7,8 +7,6 @@ import {
   TouchableOpacity,
   Alert,
   ActivityIndicator,
-  KeyboardAvoidingView,
-  ScrollView,
   Platform,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -17,6 +15,7 @@ import { supabase } from '../lib/supabase';
 import { useSettings } from '../context/SettingsContext';
 import { Ionicons } from '@expo/vector-icons';
 import { scheduleMaintenanceAlert, cancelMaintenanceAlert } from '../lib/notifications';
+import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 
 export default function AddScheduleScreen() {
   const router = useRouter();
@@ -100,15 +99,13 @@ export default function AddScheduleScreen() {
   };
 
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      keyboardVerticalOffset={Platform.OS === 'ios' ? 80 : 0}
-    >
-      <ScrollView
+    <View style={styles.container}>
+      <KeyboardAwareScrollView
         contentContainerStyle={{ paddingBottom: 120 }}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
+        enableOnAndroid={true}
+        extraScrollHeight={20}
       >
         <Text style={styles.headerText}>SET INTERVAL</Text>
         <Text style={styles.subText}>Define when this task should be performed next.</Text>
@@ -167,7 +164,7 @@ export default function AddScheduleScreen() {
             </View>
           </View>
         </View>
-      </ScrollView>
+      </KeyboardAwareScrollView>
 
       <TouchableOpacity
         style={[styles.floatingButton, isSubmitting && { opacity: 0.7 }]}
@@ -180,7 +177,7 @@ export default function AddScheduleScreen() {
           <Text style={styles.floatingButtonText}>SAVE SCHEDULE</Text>
         )}
       </TouchableOpacity>
-    </KeyboardAvoidingView>
+    </View>
   );
 }
 

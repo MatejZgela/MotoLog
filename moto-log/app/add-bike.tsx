@@ -6,8 +6,6 @@ import {
   StyleSheet,
   TouchableOpacity,
   Alert,
-  KeyboardAvoidingView,
-  ScrollView,
   Platform,
   ActivityIndicator,
 } from 'react-native';
@@ -15,6 +13,7 @@ import { useRouter } from 'expo-router';
 import { supabase } from '../lib/supabase';
 import { useSettings } from '../context/SettingsContext';
 import { Ionicons } from '@expo/vector-icons';
+import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 
 export default function AddBikeScreen() {
   const router = useRouter();
@@ -71,15 +70,13 @@ export default function AddBikeScreen() {
   };
 
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      keyboardVerticalOffset={Platform.OS === 'ios' ? 80 : 0}
-    >
-      <ScrollView
+    <View style={styles.container}>
+      <KeyboardAwareScrollView
         contentContainerStyle={{ paddingBottom: 120 }}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
+        enableOnAndroid={true}
+        extraScrollHeight={20}
       >
         <Text style={styles.label}>NICKNAME (Optional)</Text>
         <View style={styles.inputContainer}>
@@ -142,7 +139,7 @@ export default function AddBikeScreen() {
             placeholderTextColor="#666"
           />
         </View>
-      </ScrollView>
+      </KeyboardAwareScrollView>
 
       <TouchableOpacity
         style={[styles.floatingButton, isSubmitting && { opacity: 0.7 }]}
@@ -155,7 +152,7 @@ export default function AddBikeScreen() {
           <Text style={styles.floatingButtonText}>SAVE MOTORCYCLE</Text>
         )}
       </TouchableOpacity>
-    </KeyboardAvoidingView>
+    </View>
   );
 }
 

@@ -7,10 +7,8 @@ import {
   TouchableOpacity,
   Image,
   Alert,
-  ScrollView,
   ActivityIndicator,
   Platform,
-  KeyboardAvoidingView,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
@@ -21,6 +19,7 @@ import * as ImageManipulator from 'expo-image-manipulator';
 import { useSettings } from '../context/SettingsContext';
 import { Ionicons } from '@expo/vector-icons';
 import { scheduleMaintenanceAlert } from '../lib/notifications';
+import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 
 export default function EditLogScreen() {
   const router = useRouter();
@@ -220,15 +219,13 @@ export default function EditLogScreen() {
   }
 
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      keyboardVerticalOffset={Platform.OS === 'ios' ? 80 : 0}
-    >
-      <ScrollView
+    <View style={styles.container}>
+      <KeyboardAwareScrollView
         contentContainerStyle={{ paddingBottom: 120 }}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
+        enableOnAndroid={true}
+        extraScrollHeight={20}
       >
         <Text style={styles.label}>MAINTENANCE CATEGORY</Text>
         <View style={styles.pickerContainer}>
@@ -348,7 +345,7 @@ export default function EditLogScreen() {
             <Text style={styles.photoText}>+ ATTACH BILL / RECEIPT</Text>
           )}
         </TouchableOpacity>
-      </ScrollView>
+      </KeyboardAwareScrollView>
 
       <TouchableOpacity
         style={[styles.floatingButton, isSubmitting && { opacity: 0.7 }]}
@@ -361,7 +358,7 @@ export default function EditLogScreen() {
           <Text style={styles.floatingButtonText}>SAVE CHANGES</Text>
         )}
       </TouchableOpacity>
-    </KeyboardAvoidingView>
+    </View>
   );
 }
 
