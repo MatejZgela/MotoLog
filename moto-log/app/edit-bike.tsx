@@ -115,7 +115,7 @@ export default function EditBikeScreen() {
               }
 
               await supabase.from('motorcycles').delete().eq('id', bikeId);
-              router.replace('/');
+              router.dismissAll();
             } catch (error: any) {
               Alert.alert('Error', error.message);
               setIsSubmitting(false);

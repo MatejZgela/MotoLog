@@ -16,7 +16,8 @@
           "photosPermission": "Allow Moto Log to access your photos to upload past maintenance records."
         }
       ],
-      "expo-router"
+      "expo-router",
+      "expo-font"
     ],
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -36,10 +37,21 @@
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ],
+      "package": "com.mz.motolog"
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "bf7cd73f-5c45-4d2e-9e75-b9deb086b80d"
+      }
     }
   }
 }
