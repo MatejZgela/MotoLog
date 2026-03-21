@@ -7,17 +7,21 @@ import {
   TouchableOpacity,
   Alert,
   ActivityIndicator,
+  KeyboardAvoidingView,
+  ScrollView,
+  Platform,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Picker } from '@react-native-picker/picker';
 import { supabase } from '../lib/supabase';
 import { useSettings } from '../context/SettingsContext';
 import { Ionicons } from '@expo/vector-icons';
+import { scheduleMaintenanceAlert, cancelMaintenanceAlert } from '../lib/notifications';
 
 export default function AddScheduleScreen() {
   const router = useRouter();
   const { bikeId } = useLocalSearchParams();
-  const { unit } = useSettings(); // Pull in the global unit!
+  const { unit } = useSettings();
 
   const [task, setTask] = useState('Engine Oil');
   const [distance, setDistance] = useState('');
@@ -51,6 +55,8 @@ export default function AddScheduleScreen() {
         interval_days: days ? parseInt(days) : null,
       };
 
+      let savedScheduleId = existingSchedule?.id;
+
       if (existingSchedule) {
         const { error: updateError } = await supabase
           .from('maintenance_schedules')
@@ -59,11 +65,28 @@ export default function AddScheduleScreen() {
 
         if (updateError) throw updateError;
       } else {
-        const { error: insertError } = await supabase
+        const { data: newSchedule, error: insertError } = await supabase
           .from('maintenance_schedules')
-          .insert([payload]);
+          .insert([payload])
+          .select()
+          .single();
 
         if (insertError) throw insertError;
+        savedScheduleId = newSchedule.id;
+      }
+
+      if (days && savedScheduleId) {
+        const { data: bike } = await supabase
+          .from('motorcycles')
+          .select('make, model')
+          .eq('id', bikeId)
+          .single();
+
+        const bikeName = bike ? `${bike.make} ${bike.model}` : 'your bike';
+
+        await scheduleMaintenanceAlert(savedScheduleId, bikeName, task, parseInt(days));
+      } else if (savedScheduleId) {
+        await cancelMaintenanceAlert(savedScheduleId);
       }
 
       Alert.alert('Success', `${task} schedule saved!`);
@@ -77,78 +100,87 @@ export default function AddScheduleScreen() {
   };
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.headerText}>SET INTERVAL</Text>
-      <Text style={styles.subText}>Define when this task should be performed next.</Text>
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 80 : 0}
+    >
+      <ScrollView
+        contentContainerStyle={{ paddingBottom: 120 }}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
+        <Text style={styles.headerText}>SET INTERVAL</Text>
+        <Text style={styles.subText}>Define when this task should be performed next.</Text>
 
-      <Text style={styles.label}>MAINTENANCE CATEGORY</Text>
-      <View style={styles.pickerContainer}>
-        <Picker
-          selectedValue={task}
-          onValueChange={(itemValue) => setTask(itemValue)}
-          mode="dialog"
-          style={{ color: '#ffffff', backgroundColor: '#1c1c1e' }}
-          dropdownIconColor="#ff6600"
-        >
-          <Picker.Item label="Engine Oil & Filter" value="Engine Oil" />
-          <Picker.Item label="Chain & Sprockets" value="Chain & Sprockets" />
-          <Picker.Item label="Brake Pads & Rotors" value="Brakes" />
-          <Picker.Item label="Brake Fluid Flush" value="Brake Fluid" />
-          <Picker.Item label="Tires" value="Tires" />
-          <Picker.Item label="Air Filter" value="Air Filter" />
-          <Picker.Item label="Valve Clearance" value="Valve Clearance" />
-          <Picker.Item label="Spark Plugs" value="Spark Plugs" />
-          <Picker.Item label="Coolant Flush" value="Coolant" />
-          <Picker.Item label="Suspension/Forks" value="Suspension" />
-          <Picker.Item label="Other / Custom" value="Other" />
-        </Picker>
-      </View>
-
-      <View style={styles.row}>
-        <View style={styles.halfInputContainer}>
-          {/* Dynamic Unit Label! */}
-          <Text style={styles.label}>EVERY ({unit.toUpperCase()})</Text>
-          <View style={styles.inputWrapper}>
-            <Ionicons name="map-outline" size={18} color="#888" style={styles.icon} />
-            <TextInput
-              style={styles.input}
-              value={distance}
-              onChangeText={setDistance}
-              keyboardType="numeric"
-              placeholder="e.g., 3000"
-              placeholderTextColor="#666"
-            />
-          </View>
+        <Text style={styles.label}>MAINTENANCE CATEGORY</Text>
+        <View style={styles.pickerContainer}>
+          <Picker
+            selectedValue={task}
+            onValueChange={(itemValue) => setTask(itemValue)}
+            mode="dialog"
+            style={{ color: '#ffffff', backgroundColor: '#1c1c1e' }}
+            dropdownIconColor="#ff6600"
+          >
+            <Picker.Item label="Engine Oil & Filter" value="Engine Oil" />
+            <Picker.Item label="Chain & Sprockets" value="Chain & Sprockets" />
+            <Picker.Item label="Brake Pads & Rotors" value="Brakes" />
+            <Picker.Item label="Brake Fluid Flush" value="Brake Fluid" />
+            <Picker.Item label="Tires" value="Tires" />
+            <Picker.Item label="Air Filter" value="Air Filter" />
+            <Picker.Item label="Valve Clearance" value="Valve Clearance" />
+            <Picker.Item label="Spark Plugs" value="Spark Plugs" />
+            <Picker.Item label="Coolant Flush" value="Coolant" />
+            <Picker.Item label="Suspension/Forks" value="Suspension" />
+            <Picker.Item label="Other / Custom" value="Other" />
+          </Picker>
         </View>
 
-        <View style={styles.halfInputContainer}>
-          <Text style={styles.label}>OR EVERY (DAYS)</Text>
-          <View style={styles.inputWrapper}>
-            <Ionicons name="time-outline" size={18} color="#888" style={styles.icon} />
-            <TextInput
-              style={styles.input}
-              value={days}
-              onChangeText={setDays}
-              keyboardType="numeric"
-              placeholder="e.g., 365"
-              placeholderTextColor="#666"
-            />
+        <View style={styles.row}>
+          <View style={styles.halfInputContainer}>
+            <Text style={styles.label}>EVERY ({unit.toUpperCase()})</Text>
+            <View style={styles.inputWrapper}>
+              <Ionicons name="map-outline" size={18} color="#888" style={styles.icon} />
+              <TextInput
+                style={styles.input}
+                value={distance}
+                onChangeText={setDistance}
+                keyboardType="numeric"
+                placeholder="e.g., 3000"
+                placeholderTextColor="#666"
+              />
+            </View>
+          </View>
+
+          <View style={styles.halfInputContainer}>
+            <Text style={styles.label}>OR EVERY (DAYS)</Text>
+            <View style={styles.inputWrapper}>
+              <Ionicons name="time-outline" size={18} color="#888" style={styles.icon} />
+              <TextInput
+                style={styles.input}
+                value={days}
+                onChangeText={setDays}
+                keyboardType="numeric"
+                placeholder="e.g., 365"
+                placeholderTextColor="#666"
+              />
+            </View>
           </View>
         </View>
-      </View>
+      </ScrollView>
 
       <TouchableOpacity
-        style={[styles.button, isSubmitting && { opacity: 0.7 }]}
+        style={[styles.floatingButton, isSubmitting && { opacity: 0.7 }]}
         onPress={handleSave}
         disabled={isSubmitting}
       >
         {isSubmitting ? (
           <ActivityIndicator color="#fff" />
         ) : (
-          <Text style={styles.buttonText}>SAVE SCHEDULE</Text>
+          <Text style={styles.floatingButtonText}>SAVE SCHEDULE</Text>
         )}
       </TouchableOpacity>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -169,7 +201,6 @@ const styles = StyleSheet.create({
   row: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 8 },
   halfInputContainer: { width: '48%' },
 
-  // Wrapper for the half inputs to hold the icon
   inputWrapper: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -187,12 +218,17 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
 
-  button: {
+  floatingButton: {
     backgroundColor: '#ff6600',
     padding: 16,
     borderRadius: 8,
+    flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 40,
+    justifyContent: 'center',
+    position: 'absolute',
+    bottom: 30,
+    left: 20,
+    right: 20,
   },
-  buttonText: { color: '#ffffff', fontSize: 16, fontWeight: 'bold' },
+  floatingButtonText: { color: '#ffffff', fontSize: 16, fontWeight: 'bold' },
 });

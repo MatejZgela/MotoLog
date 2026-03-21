@@ -7,6 +7,9 @@ import {
   TouchableOpacity,
   Alert,
   ActivityIndicator,
+  KeyboardAvoidingView,
+  ScrollView,
+  Platform,
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { supabase } from '../lib/supabase';
@@ -16,14 +19,16 @@ import { Ionicons } from '@expo/vector-icons';
 export default function EditBikeScreen() {
   const router = useRouter();
   const { bikeId } = useLocalSearchParams();
-  const { unit } = useSettings(); // Pull in the global unit!
+  const { unit } = useSettings();
 
   const [make, setMake] = useState('');
   const [model, setModel] = useState('');
   const [year, setYear] = useState('');
   const [odometer, setOdometer] = useState('');
   const [nickname, setNickname] = useState('');
+
   const [loading, setLoading] = useState(true);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     const fetchBike = async () => {
@@ -55,22 +60,75 @@ export default function EditBikeScreen() {
       return;
     }
 
-    const { error } = await supabase
-      .from('motorcycles')
-      .update({
-        nickname: nickname || null,
-        make: make,
-        model: model,
-        year: parseInt(year),
-        current_odometer: parseInt(odometer),
-      })
-      .eq('id', bikeId);
+    setIsSubmitting(true);
 
-    if (error) {
-      Alert.alert('Error', error.message);
-    } else {
+    try {
+      const { error } = await supabase
+        .from('motorcycles')
+        .update({
+          nickname: nickname || null,
+          make: make,
+          model: model,
+          year: year ? parseInt(year) : null,
+          current_odometer: parseInt(odometer),
+        })
+        .eq('id', bikeId);
+
+      if (error) throw error;
       router.back();
+    } catch (error: any) {
+      Alert.alert('Error', error.message);
+    } finally {
+      setIsSubmitting(false);
     }
+  };
+
+  const handleDeleteBike = async () => {
+    Alert.alert(
+      'Delete Motorcycle',
+      'Are you sure? This permanently deletes the bike, all its logs, and all attached photos.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setIsSubmitting(true);
+
+              // 1. Fetch all logs for this bike
+              const { data: logs } = await supabase
+                .from('maintenance_logs')
+                .select('image_before_url, image_after_url, receipt_image_url')
+                .eq('motorcycle_id', bikeId);
+
+              // 2. Collect all valid image URLs
+              let fileNames: string[] = [];
+              if (logs) {
+                logs.forEach((log) => {
+                  if (log.image_before_url) fileNames.push(log.image_before_url.split('/').pop()!);
+                  if (log.image_after_url) fileNames.push(log.image_after_url.split('/').pop()!);
+                  if (log.receipt_image_url)
+                    fileNames.push(log.receipt_image_url.split('/').pop()!);
+                });
+              }
+
+              // 3. Delete all photos from Supabase Storage
+              if (fileNames.length > 0) {
+                await supabase.storage.from('maintenance-photos').remove(fileNames);
+              }
+
+              // 4. Delete the bike (Database automatically cascades to logs/schedules)
+              await supabase.from('motorcycles').delete().eq('id', bikeId);
+              router.replace('/');
+            } catch (error: any) {
+              Alert.alert('Error', error.message);
+              setIsSubmitting(false);
+            }
+          },
+        },
+      ],
+    );
   };
 
   if (loading) {
@@ -78,68 +136,91 @@ export default function EditBikeScreen() {
   }
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.label}>NICKNAME (Optional)</Text>
-      <View style={styles.inputContainer}>
-        <Ionicons name="pricetag-outline" size={20} color="#888" style={styles.icon} />
-        <TextInput
-          style={styles.input}
-          value={nickname}
-          onChangeText={setNickname}
-          placeholderTextColor="#666"
-        />
-      </View>
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 80 : 0}
+    >
+      <ScrollView
+        contentContainerStyle={{ paddingBottom: 120 }}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
+        <Text style={styles.label}>NICKNAME (Optional)</Text>
+        <View style={styles.inputContainer}>
+          <Ionicons name="pricetag-outline" size={20} color="#888" style={styles.icon} />
+          <TextInput
+            style={styles.input}
+            value={nickname}
+            onChangeText={setNickname}
+            placeholderTextColor="#666"
+          />
+        </View>
 
-      <Text style={styles.label}>MAKE</Text>
-      <View style={styles.inputContainer}>
-        <Ionicons name="construct-outline" size={20} color="#888" style={styles.icon} />
-        <TextInput
-          style={styles.input}
-          value={make}
-          onChangeText={setMake}
-          placeholderTextColor="#666"
-        />
-      </View>
+        <Text style={styles.label}>MAKE</Text>
+        <View style={styles.inputContainer}>
+          <Ionicons name="construct-outline" size={20} color="#888" style={styles.icon} />
+          <TextInput
+            style={styles.input}
+            value={make}
+            onChangeText={setMake}
+            placeholderTextColor="#666"
+          />
+        </View>
 
-      <Text style={styles.label}>MODEL</Text>
-      <View style={styles.inputContainer}>
-        <Ionicons name="bicycle-outline" size={20} color="#888" style={styles.icon} />
-        <TextInput
-          style={styles.input}
-          value={model}
-          onChangeText={setModel}
-          placeholderTextColor="#666"
-        />
-      </View>
+        <Text style={styles.label}>MODEL</Text>
+        <View style={styles.inputContainer}>
+          <Ionicons name="bicycle-outline" size={20} color="#888" style={styles.icon} />
+          <TextInput
+            style={styles.input}
+            value={model}
+            onChangeText={setModel}
+            placeholderTextColor="#666"
+          />
+        </View>
 
-      <Text style={styles.label}>YEAR</Text>
-      <View style={styles.inputContainer}>
-        <Ionicons name="calendar-outline" size={20} color="#888" style={styles.icon} />
-        <TextInput
-          style={styles.input}
-          value={year}
-          onChangeText={setYear}
-          keyboardType="numeric"
-          placeholderTextColor="#666"
-        />
-      </View>
+        <Text style={styles.label}>YEAR</Text>
+        <View style={styles.inputContainer}>
+          <Ionicons name="calendar-outline" size={20} color="#888" style={styles.icon} />
+          <TextInput
+            style={styles.input}
+            value={year}
+            onChangeText={setYear}
+            keyboardType="numeric"
+            placeholderTextColor="#666"
+          />
+        </View>
 
-      <Text style={styles.label}>CURRENT ODOMETER ({unit})</Text>
-      <View style={styles.inputContainer}>
-        <Ionicons name="speedometer-outline" size={20} color="#888" style={styles.icon} />
-        <TextInput
-          style={styles.input}
-          value={odometer}
-          onChangeText={setOdometer}
-          keyboardType="numeric"
-          placeholderTextColor="#666"
-        />
-      </View>
+        <Text style={styles.label}>CURRENT ODOMETER ({unit})</Text>
+        <View style={styles.inputContainer}>
+          <Ionicons name="speedometer-outline" size={20} color="#888" style={styles.icon} />
+          <TextInput
+            style={styles.input}
+            value={odometer}
+            onChangeText={setOdometer}
+            keyboardType="numeric"
+            placeholderTextColor="#666"
+          />
+        </View>
 
-      <TouchableOpacity style={styles.button} onPress={handleUpdate}>
-        <Text style={styles.buttonText}>SAVE CHANGES</Text>
+        <TouchableOpacity style={styles.deleteWrapper} onPress={handleDeleteBike}>
+          <Ionicons name="trash-outline" size={18} color="#ff4444" style={{ marginRight: 8 }} />
+          <Text style={styles.deleteText}>DELETE MOTORCYCLE</Text>
+        </TouchableOpacity>
+      </ScrollView>
+
+      <TouchableOpacity
+        style={[styles.floatingButton, isSubmitting && { opacity: 0.7 }]}
+        onPress={handleUpdate}
+        disabled={isSubmitting}
+      >
+        {isSubmitting ? (
+          <ActivityIndicator color="#fff" />
+        ) : (
+          <Text style={styles.floatingButtonText}>SAVE CHANGES</Text>
+        )}
       </TouchableOpacity>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -162,12 +243,29 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
     fontSize: 16,
   },
-  button: {
+  deleteWrapper: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 40,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#ff4444',
+    borderRadius: 8,
+    backgroundColor: 'rgba(255, 68, 68, 0.1)',
+  },
+  deleteText: { color: '#ff4444', fontWeight: 'bold' },
+  floatingButton: {
     backgroundColor: '#ff6600',
     padding: 16,
     borderRadius: 8,
+    flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 40,
+    justifyContent: 'center',
+    position: 'absolute',
+    bottom: 30,
+    left: 20,
+    right: 20,
   },
-  buttonText: { color: '#ffffff', fontSize: 16, fontWeight: 'bold' },
+  floatingButtonText: { color: '#ffffff', fontSize: 16, fontWeight: 'bold' },
 });

@@ -7,6 +7,10 @@ import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons'; // Added for the gear icon
 import { SettingsProvider } from '../context/SettingsContext'; // Added for global state
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { registerForPushNotificationsAsync } from '../lib/notifications';
+import { LogBox } from 'react-native';
+//TODO: remove this line after real testing starts: Silence the Expo Go notification warning
+LogBox.ignoreLogs(['expo-notifications: Android Push notifications']);
 
 export default function RootLayout() {
   const [session, setSession] = useState<Session | null>(null);
@@ -45,6 +49,11 @@ export default function RootLayout() {
       router.replace('/');
     }
   }, [session, isInitialized, segments]);
+
+  useEffect(() => {
+    // Request notification permissions on app startup
+    registerForPushNotificationsAsync();
+  }, []);
 
   // Show a dark screen with a spinner while we check their token
   if (!isInitialized) {

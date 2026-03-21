@@ -9,6 +9,8 @@ import {
   Alert,
   ScrollView,
   Platform,
+  KeyboardAvoidingView,
+  ActivityIndicator,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
@@ -18,6 +20,7 @@ import { supabase } from '../lib/supabase';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { useSettings } from '../context/SettingsContext';
 import { Ionicons } from '@expo/vector-icons';
+import { scheduleMaintenanceAlert } from '../lib/notifications';
 
 export default function LogServiceScreen() {
   const router = useRouter();
@@ -154,7 +157,7 @@ export default function LogServiceScreen() {
 
       const { data: bikeData } = await supabase
         .from('motorcycles')
-        .select('current_odometer')
+        .select('make, model, current_odometer')
         .eq('id', bikeId)
         .single();
 
@@ -163,6 +166,25 @@ export default function LogServiceScreen() {
           .from('motorcycles')
           .update({ current_odometer: parseInt(odometer) })
           .eq('id', bikeId);
+      }
+
+      const { data: schedule } = await supabase
+        .from('maintenance_schedules')
+        .select('*')
+        .eq('motorcycle_id', bikeId)
+        .eq('task_category', task)
+        .single();
+
+      if (schedule && schedule.interval_days) {
+        const nextDueDate = new Date(date);
+        nextDueDate.setDate(nextDueDate.getDate() + schedule.interval_days);
+
+        const today = new Date();
+        const diffTime = nextDueDate.getTime() - today.getTime();
+        const daysUntilDue = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+        const bikeName = bikeData ? `${bikeData.make} ${bikeData.model}` : 'your bike';
+        await scheduleMaintenanceAlert(schedule.id, bikeName, task, daysUntilDue);
       }
 
       Alert.alert('Success!', 'Maintenance logged perfectly.');
@@ -176,135 +198,149 @@ export default function LogServiceScreen() {
   };
 
   return (
-    <ScrollView style={styles.container} keyboardShouldPersistTaps="handled">
-      <Text style={styles.label}>MAINTENANCE CATEGORY</Text>
-      <View style={styles.pickerContainer}>
-        <Picker
-          selectedValue={task}
-          onValueChange={(itemValue) => setTask(itemValue)}
-          mode="dialog"
-          style={{ color: '#ffffff', backgroundColor: '#1c1c1e' }}
-          dropdownIconColor="#ff6600"
-        >
-          <Picker.Item label="Engine Oil & Filter" value="Engine Oil" />
-          <Picker.Item label="Chain & Sprockets" value="Chain & Sprockets" />
-          <Picker.Item label="Brake Pads & Rotors" value="Brakes" />
-          <Picker.Item label="Brake Fluid Flush" value="Brake Fluid" />
-          <Picker.Item label="Tires" value="Tires" />
-          <Picker.Item label="Air Filter" value="Air Filter" />
-          <Picker.Item label="Valve Clearance" value="Valve Clearance" />
-          <Picker.Item label="Spark Plugs" value="Spark Plugs" />
-          <Picker.Item label="Coolant Flush" value="Coolant" />
-          <Picker.Item label="Suspension/Forks" value="Suspension" />
-          <Picker.Item label="Other / Custom" value="Other" />
-        </Picker>
-      </View>
-
-      <Text style={styles.label}>DATE OF SERVICE</Text>
-      <TouchableOpacity style={styles.inputContainer} onPress={() => setShowDatePicker(true)}>
-        <Ionicons name="calendar-outline" size={20} color="#888" style={styles.icon} />
-        <Text style={{ color: '#fff', fontSize: 16, flex: 1, paddingVertical: 16 }}>
-          {date.toISOString().split('T')[0]}
-        </Text>
-      </TouchableOpacity>
-
-      {showDatePicker && (
-        <DateTimePicker
-          value={date}
-          mode="date"
-          display="default"
-          onChange={handleDateChange}
-          maximumDate={new Date()}
-          themeVariant="dark"
-        />
-      )}
-
-      <View style={styles.row}>
-        <View style={styles.halfInputContainer}>
-          <Text style={styles.label}>ODOMETER ({unit})</Text>
-          <View style={styles.inputContainer}>
-            <Ionicons name="speedometer-outline" size={20} color="#888" style={styles.icon} />
-            <TextInput
-              style={styles.input}
-              value={odometer}
-              onChangeText={setOdometer}
-              keyboardType="numeric"
-              placeholder="e.g., 15000"
-              placeholderTextColor="#666"
-            />
-          </View>
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 80 : 0}
+    >
+      <ScrollView
+        contentContainerStyle={{ paddingBottom: 120 }}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
+        <Text style={styles.label}>MAINTENANCE CATEGORY</Text>
+        <View style={styles.pickerContainer}>
+          <Picker
+            selectedValue={task}
+            onValueChange={(itemValue) => setTask(itemValue)}
+            mode="dialog"
+            style={{ color: '#ffffff', backgroundColor: '#1c1c1e' }}
+            dropdownIconColor="#ff6600"
+          >
+            <Picker.Item label="Engine Oil & Filter" value="Engine Oil" />
+            <Picker.Item label="Chain & Sprockets" value="Chain & Sprockets" />
+            <Picker.Item label="Brake Pads & Rotors" value="Brakes" />
+            <Picker.Item label="Brake Fluid Flush" value="Brake Fluid" />
+            <Picker.Item label="Tires" value="Tires" />
+            <Picker.Item label="Air Filter" value="Air Filter" />
+            <Picker.Item label="Valve Clearance" value="Valve Clearance" />
+            <Picker.Item label="Spark Plugs" value="Spark Plugs" />
+            <Picker.Item label="Coolant Flush" value="Coolant" />
+            <Picker.Item label="Suspension/Forks" value="Suspension" />
+            <Picker.Item label="Other / Custom" value="Other" />
+          </Picker>
         </View>
 
-        <View style={styles.halfInputContainer}>
-          <Text style={styles.label}>TOTAL COST ($)</Text>
-          <View style={styles.inputContainer}>
-            <Ionicons name="cash-outline" size={20} color="#888" style={styles.icon} />
-            <TextInput
-              style={styles.input}
-              value={cost}
-              onChangeText={setCost}
-              keyboardType="numeric"
-              placeholder="e.g., 85.50"
-              placeholderTextColor="#666"
-            />
-          </View>
-        </View>
-      </View>
-
-      <Text style={styles.label}>MECHANIC NOTES</Text>
-      <View style={[styles.inputContainer, { alignItems: 'flex-start' }]}>
-        <Ionicons
-          name="document-text-outline"
-          size={20}
-          color="#888"
-          style={[styles.icon, { marginTop: 16 }]}
-        />
-        <TextInput
-          style={[styles.input, styles.textArea]}
-          value={notes}
-          onChangeText={setNotes}
-          multiline={true}
-          numberOfLines={4}
-          placeholder="e.g., Used Motul 10w40 and K&N filter. Stripped one fairing bolt."
-          placeholderTextColor="#666"
-        />
-      </View>
-
-      <Text style={styles.label}>EVIDENCE & RECEIPTS</Text>
-      <View style={styles.photoContainer}>
-        <TouchableOpacity style={styles.photoBox} onPress={() => handleImagePick('before')}>
-          {beforeImage ? (
-            <Image source={{ uri: beforeImage }} style={styles.imagePreview} />
-          ) : (
-            <Text style={styles.photoText}>+ BEFORE</Text>
-          )}
+        <Text style={styles.label}>DATE OF SERVICE</Text>
+        <TouchableOpacity style={styles.inputContainer} onPress={() => setShowDatePicker(true)}>
+          <Ionicons name="calendar-outline" size={20} color="#888" style={styles.icon} />
+          <Text style={{ color: '#fff', fontSize: 16, flex: 1, paddingVertical: 16 }}>
+            {date.toISOString().split('T')[0]}
+          </Text>
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.photoBox} onPress={() => handleImagePick('after')}>
-          {afterImage ? (
-            <Image source={{ uri: afterImage }} style={styles.imagePreview} />
-          ) : (
-            <Text style={styles.photoText}>+ AFTER</Text>
-          )}
-        </TouchableOpacity>
-      </View>
-
-      <TouchableOpacity style={styles.receiptBox} onPress={() => handleImagePick('receipt')}>
-        {receiptImage ? (
-          <Image source={{ uri: receiptImage }} style={styles.imagePreview} />
-        ) : (
-          <Text style={styles.photoText}>+ ATTACH BILL / RECEIPT</Text>
+        {showDatePicker && (
+          <DateTimePicker
+            value={date}
+            mode="date"
+            display="default"
+            onChange={handleDateChange}
+            maximumDate={new Date()}
+            themeVariant="dark"
+          />
         )}
-      </TouchableOpacity>
+
+        <View style={styles.row}>
+          <View style={styles.halfInputContainer}>
+            <Text style={styles.label}>ODOMETER ({unit})</Text>
+            <View style={styles.inputContainer}>
+              <Ionicons name="speedometer-outline" size={20} color="#888" style={styles.icon} />
+              <TextInput
+                style={styles.input}
+                value={odometer}
+                onChangeText={setOdometer}
+                keyboardType="numeric"
+                placeholder="e.g., 15000"
+                placeholderTextColor="#666"
+              />
+            </View>
+          </View>
+
+          <View style={styles.halfInputContainer}>
+            <Text style={styles.label}>TOTAL COST ($)</Text>
+            <View style={styles.inputContainer}>
+              <Ionicons name="cash-outline" size={20} color="#888" style={styles.icon} />
+              <TextInput
+                style={styles.input}
+                value={cost}
+                onChangeText={setCost}
+                keyboardType="numeric"
+                placeholder="e.g., 85.50"
+                placeholderTextColor="#666"
+              />
+            </View>
+          </View>
+        </View>
+
+        <Text style={styles.label}>MECHANIC NOTES</Text>
+        <View style={[styles.inputContainer, { alignItems: 'flex-start' }]}>
+          <Ionicons
+            name="document-text-outline"
+            size={20}
+            color="#888"
+            style={[styles.icon, { marginTop: 16 }]}
+          />
+          <TextInput
+            style={[styles.input, styles.textArea]}
+            value={notes}
+            onChangeText={setNotes}
+            multiline={true}
+            numberOfLines={4}
+            placeholder="e.g., Used Motul 10w40 and K&N filter. Stripped one fairing bolt."
+            placeholderTextColor="#666"
+          />
+        </View>
+
+        <Text style={styles.label}>EVIDENCE & RECEIPTS</Text>
+        <View style={styles.photoContainer}>
+          <TouchableOpacity style={styles.photoBox} onPress={() => handleImagePick('before')}>
+            {beforeImage ? (
+              <Image source={{ uri: beforeImage }} style={styles.imagePreview} />
+            ) : (
+              <Text style={styles.photoText}>+ BEFORE</Text>
+            )}
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.photoBox} onPress={() => handleImagePick('after')}>
+            {afterImage ? (
+              <Image source={{ uri: afterImage }} style={styles.imagePreview} />
+            ) : (
+              <Text style={styles.photoText}>+ AFTER</Text>
+            )}
+          </TouchableOpacity>
+        </View>
+
+        <TouchableOpacity style={styles.receiptBox} onPress={() => handleImagePick('receipt')}>
+          {receiptImage ? (
+            <Image source={{ uri: receiptImage }} style={styles.imagePreview} />
+          ) : (
+            <Text style={styles.photoText}>+ ATTACH BILL / RECEIPT</Text>
+          )}
+        </TouchableOpacity>
+      </ScrollView>
 
       <TouchableOpacity
-        style={[styles.button, isSubmitting && { opacity: 0.7 }]}
+        style={[styles.floatingButton, isSubmitting && { opacity: 0.7 }]}
         onPress={handleSave}
         disabled={isSubmitting}
       >
-        <Text style={styles.buttonText}>{isSubmitting ? 'SAVING...' : 'SAVE LOG'}</Text>
+        {isSubmitting ? (
+          <ActivityIndicator color="#fff" />
+        ) : (
+          <Text style={styles.floatingButtonText}>SAVE LOG</Text>
+        )}
       </TouchableOpacity>
-    </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -369,13 +405,17 @@ const styles = StyleSheet.create({
   photoText: { color: '#888', fontWeight: 'bold' },
   imagePreview: { width: '100%', height: '100%' },
 
-  button: {
+  floatingButton: {
     backgroundColor: '#ff6600',
     padding: 16,
     borderRadius: 8,
+    flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 40,
-    marginBottom: 40,
+    justifyContent: 'center',
+    position: 'absolute',
+    bottom: 30,
+    left: 20,
+    right: 20,
   },
-  buttonText: { color: '#ffffff', fontSize: 16, fontWeight: 'bold' },
+  floatingButtonText: { color: '#ffffff', fontSize: 16, fontWeight: 'bold' },
 });

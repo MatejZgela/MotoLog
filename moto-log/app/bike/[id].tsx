@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -9,18 +9,21 @@ import {
   Image,
   Modal,
   Alert,
+  TextInput, // <-- NEW IMPORT
+  Platform,
 } from 'react-native';
 import { useLocalSearchParams, useRouter, useFocusEffect, Stack } from 'expo-router';
 import { supabase } from '../../lib/supabase';
 import { useSettings } from '../../context/SettingsContext';
 import { Ionicons } from '@expo/vector-icons';
 import { Swipeable } from 'react-native-gesture-handler';
-
-// --- NEW SUB-COMPONENT: The Expandable Log Card ---
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
+import * as FileSystem from 'expo-file-system/legacy';
+// --- SUB-COMPONENT: The Expandable Log Card ---
 const LogCardItem = ({ item, unit, onEdit, onDelete, onImageTap }: any) => {
   const [expanded, setExpanded] = useState(false);
 
-  // Force this to be a strict true/false boolean using !!
   const hasExtraDetails = !!(
     item.cost ||
     item.notes ||
@@ -80,13 +83,11 @@ const LogCardItem = ({ item, unit, onEdit, onDelete, onImageTap }: any) => {
               </View>
             </View>
 
-            {/* Strict Ternary */}
             {hasExtraDetails ? (
               <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={20} color="#666" />
             ) : null}
           </View>
 
-          {/* Strict Ternary */}
           {expanded ? (
             <View>
               {item.cost || item.notes ? (
@@ -155,7 +156,7 @@ const LogCardItem = ({ item, unit, onEdit, onDelete, onImageTap }: any) => {
   );
 };
 
-// --- NEW SUB-COMPONENT: The Swipeable Schedule Card ---
+// --- SUB-COMPONENT: The Swipeable Schedule Card ---
 const ScheduleCardItem = ({ sched, unit, status, onEdit, onDelete }: any) => {
   const isOverdue = status.color === '#ff4444';
   const badgeColor = isOverdue ? 'rgba(255, 68, 68, 0.15)' : 'rgba(76, 175, 80, 0.15)';
@@ -181,7 +182,6 @@ const ScheduleCardItem = ({ sched, unit, status, onEdit, onDelete }: any) => {
           <View
             style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}
           >
-            {/* Text stays perfectly flush left with the Logs! */}
             <View style={{ flex: 1 }}>
               <Text style={styles.logTask}>{sched.task_category}</Text>
               <Text style={styles.logDetails}>
@@ -192,7 +192,6 @@ const ScheduleCardItem = ({ sched, unit, status, onEdit, onDelete }: any) => {
               <Text style={[styles.statusText, { color: status.color }]}>{status.text}</Text>
             </View>
 
-            {/* Dynamic Status Badge moved to the Right */}
             <View style={[styles.scheduleBadge, { backgroundColor: badgeColor }]}>
               <Ionicons name={iconName} size={24} color={status.color} />
             </View>
@@ -214,94 +213,244 @@ export default function BikeProfileScreen() {
   const [loading, setLoading] = useState(true);
   const [fullScreenImage, setFullScreenImage] = useState<string | null>(null);
 
-  // --- NEW: PAGINATION STATE ---
+  // --- SEARCH & SORT STATE ---
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [hasMoreLogs, setHasMoreLogs] = useState(true);
-  const LOGS_PER_PAGE = 8; // Load 8 at a time
+  const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc');
+  const [showSearch, setShowSearch] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
+  const LOGS_PER_PAGE = 8;
 
+  // The 500ms Debouncer for the search input
+  useEffect(() => {
+    const handler = setTimeout(() => setDebouncedQuery(searchQuery), 500);
+    return () => clearTimeout(handler);
+  }, [searchQuery]);
+
+  // Initial Fetch: Bike and Schedules ONLY
   useFocusEffect(
     useCallback(() => {
-      fetchInitialData();
+      const fetchBikeAndSchedules = async () => {
+        setLoading(true);
+        const { data: bikeData } = await supabase
+          .from('motorcycles')
+          .select('*')
+          .eq('id', id)
+          .single();
+        if (bikeData) setBike(bikeData);
+
+        const { data: schedData } = await supabase
+          .from('maintenance_schedules')
+          .select('*')
+          .eq('motorcycle_id', id);
+        if (schedData) setSchedules(schedData);
+        setLoading(false);
+      };
+      fetchBikeAndSchedules();
     }, [id]),
   );
 
-  const fetchInitialData = async () => {
-    setLoading(true);
+  // The Master Log Fetcher (Listens to Sort & Search changes)
+  useEffect(() => {
+    if (bike) fetchLogs(true); // 'true' forces a reset to page 0
+  }, [debouncedQuery, sortOrder, bike]);
 
-    const { data: bikeData } = await supabase.from('motorcycles').select('*').eq('id', id).single();
-    if (bikeData) setBike(bikeData);
+  const fetchLogs = async (isReset = false) => {
+    if (!isReset && (!hasMoreLogs || isLoadingMore)) return;
 
-    const { data: schedData } = await supabase
-      .from('maintenance_schedules')
-      .select('*')
-      .eq('motorcycle_id', id);
-    if (schedData) setSchedules(schedData);
+    setIsLoadingMore(true);
+    const currentLength = isReset ? 0 : logs.length;
 
-    // Fetch ONLY the first batch of logs
-    const { data: logsData } = await supabase
+    // 1. Build the base query with the active sort order
+    let query = supabase
       .from('maintenance_logs')
       .select('*')
       .eq('motorcycle_id', id)
-      .order('service_date', { ascending: false })
-      .order('created_at', { ascending: false })
-      .range(0, LOGS_PER_PAGE - 1);
+      .order('service_date', { ascending: sortOrder === 'asc' })
+      .order('created_at', { ascending: sortOrder === 'asc' });
 
-    if (logsData) {
-      setLogs(logsData);
-      if (logsData.length < LOGS_PER_PAGE) setHasMoreLogs(false);
+    // 2. Attach the search filter if they typed something
+    if (debouncedQuery) {
+      query = query.or(`task_category.ilike.%${debouncedQuery}%,notes.ilike.%${debouncedQuery}%`);
     }
 
-    setLoading(false);
-  };
-
-  // --- NEW: THE INFINITE SCROLL FUNCTION ---
-  const fetchMoreLogs = async () => {
-    if (!hasMoreLogs || isLoadingMore || logs.length === 0) return;
-    setIsLoadingMore(true);
-
-    const currentLength = logs.length;
-
-    const { data: nextBatch } = await supabase
-      .from('maintenance_logs')
-      .select('*')
-      .eq('motorcycle_id', id)
-      .order('service_date', { ascending: false })
-      .order('created_at', { ascending: false })
-      .range(currentLength, currentLength + LOGS_PER_PAGE - 1);
+    // 3. Execute with pagination
+    const { data: nextBatch } = await query.range(currentLength, currentLength + LOGS_PER_PAGE - 1);
 
     if (nextBatch && nextBatch.length > 0) {
-      setLogs((prev) => [...prev, ...nextBatch]);
-      if (nextBatch.length < LOGS_PER_PAGE) setHasMoreLogs(false);
+      setLogs(isReset ? nextBatch : (prev) => [...prev, ...nextBatch]);
+      setHasMoreLogs(nextBatch.length === LOGS_PER_PAGE);
     } else {
+      if (isReset) setLogs([]);
       setHasMoreLogs(false);
     }
 
     setIsLoadingMore(false);
   };
 
-  const handleDeleteBike = () => {
-    Alert.alert('Delete Motorcycle', 'Are you sure? This deletes all logs and schedules.', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: async () => {
-          await supabase.from('motorcycles').delete().eq('id', id);
-          router.replace('/');
-        },
-      },
-    ]);
+  const generatePDF = async () => {
+    try {
+      setIsLoadingMore(true);
+
+      const { data: allLogs, error } = await supabase
+        .from('maintenance_logs')
+        .select('*')
+        .eq('motorcycle_id', id)
+        .order('service_date', { ascending: false });
+
+      if (error) throw error;
+
+      if (!allLogs || allLogs.length === 0) {
+        Alert.alert('No Data', 'There are no logs to export.');
+        setIsLoadingMore(false);
+        return;
+      }
+
+      const tableRows = allLogs
+        .map(
+          (log) => `
+        <tr>
+          <td style="padding: 12px; border-bottom: 1px solid #ddd;">${log.service_date}</td>
+          <td style="padding: 12px; border-bottom: 1px solid #ddd;"><strong>${log.task_category}</strong></td>
+          <td style="padding: 12px; border-bottom: 1px solid #ddd;">${log.odometer_at_service} ${unit}</td>
+          <td style="padding: 12px; border-bottom: 1px solid #ddd;">${log.cost ? '$' + log.cost : '-'}</td>
+          <td style="padding: 12px; border-bottom: 1px solid #ddd; color: #555;">${log.notes || '-'}</td>
+        </tr>
+      `,
+        )
+        .join('');
+
+      const htmlContent = `
+        <html>
+          <head>
+            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no" />
+            <style>
+              body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; padding: 40px; color: #333; }
+              h1 { color: #ff6600; margin-bottom: 4px; text-transform: uppercase; }
+              h3 { color: #888; margin-top: 0; font-weight: normal; }
+              table { width: 100%; border-collapse: collapse; margin-top: 30px; font-size: 14px; }
+              th { text-align: left; padding: 12px; background-color: #f8f8f8; color: #333; border-bottom: 2px solid #ddd; }
+            </style>
+          </head>
+          <body>
+            <h1>Service History Report</h1>
+            <h3>${bike.year || ''} ${bike.make} ${bike.model} ${bike.nickname ? `("${bike.nickname}")` : ''}</h3>
+            <p><strong>Current Odometer:</strong> ${bike.current_odometer} ${unit}</p>
+            <p><strong>Generated On:</strong> ${new Date().toLocaleDateString()}</p>
+            
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Task</th>
+                  <th>Odometer</th>
+                  <th>Cost</th>
+                  <th>Notes</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${tableRows}
+              </tbody>
+            </table>
+          </body>
+        </html>
+      `;
+
+      // 1. Generate the raw PDF
+      const { uri } = await Print.printToFileAsync({ html: htmlContent });
+
+      // 2. Create a clean file name
+      const cleanMake = bike.make.replace(/[^a-zA-Z0-9]/g, '');
+      const cleanModel = bike.model.replace(/[^a-zA-Z0-9]/g, '');
+      const fileName = `${cleanMake}_${cleanModel}_Service_History.pdf`;
+      const newUri = `${FileSystem.documentDirectory}${fileName}`;
+
+      // 3. Move the file from the temp cache to our nicely named file
+      await FileSystem.moveAsync({
+        from: uri,
+        to: newUri,
+      });
+
+      // 4. Handle Save vs Share based on the OS
+      if (Platform.OS === 'android') {
+        Alert.alert(
+          'Export Report',
+          'Would you like to share this file or save it directly to your phone?',
+          [
+            {
+              text: 'Share',
+              onPress: async () => {
+                await Sharing.shareAsync(newUri, {
+                  UTI: 'public.pdf',
+                  mimeType: 'application/pdf',
+                  dialogTitle: 'Share Report',
+                });
+              },
+            },
+            {
+              text: 'Save to Device',
+              onPress: async () => {
+                try {
+                  const permissions =
+                    await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
+                  if (permissions.granted) {
+                    const base64Data = await FileSystem.readAsStringAsync(newUri, {
+                      encoding: FileSystem.EncodingType.Base64,
+                    });
+                    const savedUri = await FileSystem.StorageAccessFramework.createFileAsync(
+                      permissions.directoryUri,
+                      fileName,
+                      'application/pdf',
+                    );
+                    await FileSystem.writeAsStringAsync(savedUri, base64Data, {
+                      encoding: FileSystem.EncodingType.Base64,
+                    });
+                    Alert.alert('Success', `Report saved as ${fileName}`);
+                  }
+                } catch (err) {
+                  console.error('Save error:', err);
+                  Alert.alert('Error', 'Could not save file to device.');
+                }
+              },
+            },
+            { text: 'Cancel', style: 'cancel' },
+          ],
+        );
+      } else {
+        // iOS naturally handles both sharing and saving in its single share sheet
+        const canShare = await Sharing.isAvailableAsync();
+        if (canShare) {
+          await Sharing.shareAsync(newUri, { UTI: 'public.pdf', mimeType: 'application/pdf' });
+        }
+      }
+    } catch (err: any) {
+      console.error(err);
+      Alert.alert('Export Failed', 'Could not generate the PDF report.');
+    } finally {
+      setIsLoadingMore(false);
+    }
   };
 
-  const handleDeleteLog = (logId: string) => {
-    Alert.alert('Delete Log', 'Remove this record?', [
+  const handleDeleteLog = (log: any) => {
+    Alert.alert('Delete Log', 'Remove this record and its photos?', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Delete',
         style: 'destructive',
         onPress: async () => {
-          await supabase.from('maintenance_logs').delete().eq('id', logId);
-          fetchInitialData(); // Reset and reload after delete
+          // 1. Delete attached images from Storage
+          const urls = [log.image_before_url, log.image_after_url, log.receipt_image_url].filter(
+            Boolean,
+          );
+          if (urls.length > 0) {
+            const fileNames = urls.map((url) => url.split('/').pop());
+            await supabase.storage.from('maintenance-photos').remove(fileNames);
+          }
+
+          // 2. Delete the log from the Database
+          await supabase.from('maintenance_logs').delete().eq('id', log.id);
+          fetchLogs(true);
         },
       },
     ]);
@@ -315,7 +464,11 @@ export default function BikeProfileScreen() {
         style: 'destructive',
         onPress: async () => {
           await supabase.from('maintenance_schedules').delete().eq('id', schedId);
-          fetchInitialData();
+          const { data: schedData } = await supabase
+            .from('maintenance_schedules')
+            .select('*')
+            .eq('motorcycle_id', id);
+          setSchedules(schedData || []);
         },
       },
     ]);
@@ -378,99 +531,6 @@ export default function BikeProfileScreen() {
       </View>
     );
 
-  // --- THE NEW HEADER COMPONENT ---
-  const ListHeader = () => (
-    <View>
-      <View style={styles.headerCard}>
-        <View
-          style={{
-            flexDirection: 'row',
-            justifyContent: 'space-between',
-            alignItems: 'flex-start',
-          }}
-        >
-          <View>
-            {bike.nickname && <Text style={styles.bikeNickname}>"{bike.nickname}"</Text>}
-            <Text style={styles.bikeTitle}>
-              {bike.make} {bike.model}
-            </Text>
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
-              <Ionicons
-                name="speedometer-outline"
-                size={14}
-                color="#888"
-                style={{ marginRight: 4 }}
-              />
-              <Text style={styles.bikeDetails}>
-                ODO: {bike.current_odometer} {unit}
-              </Text>
-            </View>
-          </View>
-        </View>
-      </View>
-
-      {/* NEW: Contextual Add Schedule Button */}
-      <View
-        style={{
-          flexDirection: 'row',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          marginBottom: 16,
-        }}
-      >
-        <Text style={[styles.sectionTitle, { marginBottom: 0 }]}>TRACKED INTERVALS</Text>
-        <TouchableOpacity
-          onPress={() => router.push({ pathname: '/add-schedule', params: { bikeId: id } })}
-          style={{ flexDirection: 'row', alignItems: 'center', padding: 4 }}
-        >
-          <Text style={{ color: '#ff6600', fontWeight: 'bold', fontSize: 12, letterSpacing: 1 }}>
-            + ADD
-          </Text>
-        </TouchableOpacity>
-      </View>
-
-      {schedules.length > 0 ? (
-        <View style={{ marginBottom: 24 }}>
-          {schedules.map((sched) => {
-            const status = getScheduleStatus(sched);
-            return (
-              <ScheduleCardItem
-                key={sched.id}
-                sched={sched}
-                unit={unit}
-                status={status}
-                onEdit={() =>
-                  router.push({
-                    pathname: '/edit-schedule',
-                    params: { schedId: sched.id, bikeId: id },
-                  })
-                }
-                onDelete={() => handleDeleteSchedule(sched.id)}
-              />
-            );
-          })}
-        </View>
-      ) : (
-        <View
-          style={{
-            marginBottom: 32,
-            padding: 16,
-            backgroundColor: '#1c1c1e',
-            borderRadius: 8,
-            alignItems: 'center',
-          }}
-        >
-          <Text style={{ color: '#666', fontStyle: 'italic' }}>
-            No intervals tracked. Add one to start.
-          </Text>
-        </View>
-      )}
-
-      <Text style={styles.sectionTitle}>SERVICE HISTORY</Text>
-    </View>
-  );
-
-  // --- THE NEW FOOTER COMPONENT ---
   const ListFooter = () => (
     <View style={{ paddingBottom: 120 }}>
       {isLoadingMore && (
@@ -483,21 +543,15 @@ export default function BikeProfileScreen() {
           End of service history.
         </Text>
       )}
-      <TouchableOpacity style={styles.deleteBikeWrapper} onPress={handleDeleteBike}>
-        <Ionicons name="trash-outline" size={18} color="#ff4444" style={{ marginRight: 8 }} />
-        <Text style={{ color: '#ff4444', fontWeight: 'bold' }}>DELETE MOTORCYCLE</Text>
-      </TouchableOpacity>
     </View>
   );
 
   return (
     <>
-      {/* NEW: Contextual Edit Bike Button AND the global Settings button */}
       <Stack.Screen
         options={{
           headerRight: () => (
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              {/* The Edit Bike Pencil */}
               <TouchableOpacity
                 onPress={() => router.push({ pathname: '/edit-bike', params: { bikeId: id } })}
                 style={{ padding: 8, marginRight: 4 }}
@@ -505,7 +559,6 @@ export default function BikeProfileScreen() {
                 <Ionicons name="create-outline" size={24} color="#ff6600" />
               </TouchableOpacity>
 
-              {/* The Restored Global Settings Gear */}
               <TouchableOpacity onPress={() => router.push('/settings')} style={{ padding: 8 }}>
                 <Ionicons name="settings-outline" size={24} color="#ff6600" />
               </TouchableOpacity>
@@ -515,13 +568,162 @@ export default function BikeProfileScreen() {
       />
 
       <View style={styles.container}>
-        {/* --- THE HIGH PERFORMANCE FLATLIST --- */}
         <FlatList
           data={logs}
           keyExtractor={(item) => item.id}
           showsVerticalScrollIndicator={false}
-          ListHeaderComponent={ListHeader}
           ListFooterComponent={ListFooter}
+          /* INLINED HEADER: Crucial to prevent keyboard from closing while searching */
+          ListHeaderComponent={
+            <View>
+              <View style={styles.headerCard}>
+                <View
+                  style={{
+                    flexDirection: 'row',
+                    justifyContent: 'space-between',
+                    alignItems: 'flex-start',
+                  }}
+                >
+                  <View>
+                    {bike.nickname && <Text style={styles.bikeNickname}>"{bike.nickname}"</Text>}
+                    <Text style={styles.bikeTitle}>
+                      {bike.make} {bike.model}
+                    </Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
+                      <Ionicons
+                        name="speedometer-outline"
+                        size={14}
+                        color="#888"
+                        style={{ marginRight: 4 }}
+                      />
+                      <Text style={styles.bikeDetails}>
+                        ODO: {bike.current_odometer} {unit}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+              </View>
+
+              <View
+                style={{
+                  flexDirection: 'row',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  marginBottom: 16,
+                }}
+              >
+                <Text style={[styles.sectionTitle, { marginBottom: 0 }]}>TRACKED INTERVALS</Text>
+                <TouchableOpacity
+                  onPress={() => router.push({ pathname: '/add-schedule', params: { bikeId: id } })}
+                  style={{ flexDirection: 'row', alignItems: 'center', padding: 4 }}
+                >
+                  <Text
+                    style={{ color: '#ff6600', fontWeight: 'bold', fontSize: 12, letterSpacing: 1 }}
+                  >
+                    + ADD
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              {schedules.length > 0 ? (
+                <View style={{ marginBottom: 24 }}>
+                  {schedules.map((sched) => {
+                    const status = getScheduleStatus(sched);
+                    return (
+                      <ScheduleCardItem
+                        key={sched.id}
+                        sched={sched}
+                        unit={unit}
+                        status={status}
+                        onEdit={() =>
+                          router.push({
+                            pathname: '/edit-schedule',
+                            params: { schedId: sched.id, bikeId: id },
+                          })
+                        }
+                        onDelete={() => handleDeleteSchedule(sched.id)}
+                      />
+                    );
+                  })}
+                </View>
+              ) : (
+                <View
+                  style={{
+                    marginBottom: 32,
+                    padding: 16,
+                    backgroundColor: '#1c1c1e',
+                    borderRadius: 8,
+                    alignItems: 'center',
+                  }}
+                >
+                  <Text style={{ color: '#666', fontStyle: 'italic' }}>
+                    No intervals tracked. Add one to start.
+                  </Text>
+                </View>
+              )}
+
+              {/* SEARCH & SORT HEADER */}
+              <View
+                style={{
+                  flexDirection: 'row',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  marginBottom: 16,
+                }}
+              >
+                <Text style={[styles.sectionTitle, { marginBottom: 0 }]}>SERVICE HISTORY</Text>
+
+                <View style={{ flexDirection: 'row', gap: 16, alignItems: 'center' }}>
+                  {/* NEW: PDF Export Button */}
+                  <TouchableOpacity onPress={generatePDF}>
+                    <Ionicons name="document-text" size={20} color="#ff6600" />
+                  </TouchableOpacity>
+
+                  <TouchableOpacity onPress={() => setShowSearch(!showSearch)}>
+                    <Ionicons
+                      name="search"
+                      size={20}
+                      color={showSearch || searchQuery ? '#ff6600' : '#888'}
+                    />
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    onPress={() => setSortOrder((prev) => (prev === 'desc' ? 'asc' : 'desc'))}
+                    style={{ flexDirection: 'row', alignItems: 'center' }}
+                  >
+                    <Ionicons
+                      name={sortOrder === 'desc' ? 'arrow-down' : 'arrow-up'}
+                      size={16}
+                      color="#ff6600"
+                    />
+                    <Text
+                      style={{ color: '#ff6600', fontSize: 12, fontWeight: 'bold', marginLeft: 4 }}
+                    >
+                      {sortOrder === 'desc' ? 'NEWEST' : 'OLDEST'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              {showSearch && (
+                <View style={styles.searchContainer}>
+                  <Ionicons name="search" size={18} color="#666" style={{ marginRight: 8 }} />
+                  <TextInput
+                    style={styles.searchInput}
+                    placeholder="Search by task or notes..."
+                    placeholderTextColor="#666"
+                    value={searchQuery}
+                    onChangeText={setSearchQuery}
+                  />
+                  {searchQuery.length > 0 && (
+                    <TouchableOpacity onPress={() => setSearchQuery('')}>
+                      <Ionicons name="close-circle" size={18} color="#888" />
+                    </TouchableOpacity>
+                  )}
+                </View>
+              )}
+            </View>
+          }
           ListEmptyComponent={() => (
             <View style={styles.emptyState}>
               <Ionicons
@@ -530,7 +732,9 @@ export default function BikeProfileScreen() {
                 color="#333"
                 style={{ marginBottom: 12 }}
               />
-              <Text style={styles.subText}>No service history yet.</Text>
+              <Text style={styles.subText}>
+                {searchQuery ? 'No matching logs found.' : 'No service history yet.'}
+              </Text>
             </View>
           )}
           renderItem={({ item }) => (
@@ -540,12 +744,12 @@ export default function BikeProfileScreen() {
               onEdit={() =>
                 router.push({ pathname: '/edit-log', params: { logId: item.id, bikeId: id } })
               }
-              onDelete={() => handleDeleteLog(item.id)}
+              onDelete={() => handleDeleteLog(item)}
               onImageTap={setFullScreenImage}
             />
           )}
-          onEndReached={fetchMoreLogs} // Triggers when you scroll near the bottom
-          onEndReachedThreshold={0.5} // Trigger it when you are halfway through the last items
+          onEndReached={() => fetchLogs(false)} // Pass false so it knows it's an infinite scroll fetch, not a reset
+          onEndReachedThreshold={0.5}
         />
 
         <TouchableOpacity
@@ -623,9 +827,21 @@ const styles = StyleSheet.create({
   emptyState: { alignItems: 'center', marginTop: 40 },
   subText: { color: '#888888', fontSize: 16 },
 
-  statusText: { fontSize: 14, fontWeight: 'bold', marginTop: 8 },
+  searchContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#1c1c1e',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#333',
+  },
+  searchInput: { flex: 1, color: '#fff', fontSize: 14 },
 
-  logHeader: { marginBottom: 0 }, // Changed so it collapses nicely
+  statusText: { fontSize: 14, fontWeight: 'bold', marginTop: 8 },
+  logHeader: { marginBottom: 0 },
   logTask: { color: '#ffffff', fontSize: 18, fontWeight: 'bold', marginBottom: 4 },
   logDetails: { color: '#888888', fontSize: 14 },
 
@@ -686,20 +902,12 @@ const styles = StyleSheet.create({
   costText: { color: '#4CAF50', fontWeight: 'bold', fontSize: 14 },
   notesText: { color: '#cccccc', fontStyle: 'italic', fontSize: 14, flexShrink: 1 },
 
-  deleteBikeWrapper: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginTop: 24,
-  },
-
   logCard: { backgroundColor: '#1c1c1e', padding: 16, borderRadius: 8 },
 
   scheduleCard: {
     backgroundColor: '#1c1c1e',
     padding: 16,
     borderRadius: 8,
-    // No borders! Pure, clean box model.
   },
   scheduleBadge: {
     width: 48,
@@ -707,7 +915,7 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     justifyContent: 'center',
     alignItems: 'center',
-    marginLeft: 16 /* <-- Swapped from marginRight */,
+    marginLeft: 16,
   },
 
   deleteSwipeBtn: {
@@ -717,7 +925,7 @@ const styles = StyleSheet.create({
     width: 80,
     borderRadius: 8,
     marginLeft: 8,
-    alignSelf: 'stretch' /* <-- Replaces height: '100%' */,
+    alignSelf: 'stretch',
   },
 
   editSwipeBtn: {
@@ -727,6 +935,6 @@ const styles = StyleSheet.create({
     width: 80,
     borderRadius: 8,
     marginRight: 8,
-    alignSelf: 'stretch' /* <-- Replaces height: '100%' */,
+    alignSelf: 'stretch',
   },
 });

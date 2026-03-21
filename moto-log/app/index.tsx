@@ -10,7 +10,7 @@ import {
 import { useRouter, useFocusEffect } from 'expo-router';
 import { supabase } from '../lib/supabase';
 import { useSettings } from '../context/SettingsContext';
-import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons'; // <-- Import the icons!
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 
 export default function GarageScreen() {
   const router = useRouter();
@@ -37,29 +37,102 @@ export default function GarageScreen() {
       return;
     }
 
-    const { data, error } = await supabase
+    // 1. Fetch all bikes for the user
+    const { data: bikesData, error: bikesError } = await supabase
       .from('motorcycles')
       .select('*')
       .eq('user_id', user.id)
       .order('created_at', { ascending: false });
 
-    if (error) {
-      console.error('Error fetching bikes:', error);
-    } else {
-      setBikes(data || []);
+    if (bikesError || !bikesData || bikesData.length === 0) {
+      setBikes([]);
+      setLoading(false);
+      return;
     }
 
+    const bikeIds = bikesData.map((b) => b.id);
+
+    // 2. Fetch all schedules and logs for these bikes
+    const { data: schedules } = await supabase
+      .from('maintenance_schedules')
+      .select('*')
+      .in('motorcycle_id', bikeIds);
+    const { data: logs } = await supabase
+      .from('maintenance_logs')
+      .select('*')
+      .in('motorcycle_id', bikeIds);
+
+    // 3. The Math Engine: Check if any bike is overdue
+    const bikesWithAlerts = bikesData.map((bike) => {
+      const bikeSchedules = schedules?.filter((s) => s.motorcycle_id === bike.id) || [];
+      const bikeLogs = logs?.filter((l) => l.motorcycle_id === bike.id) || [];
+      let isOverdue = false;
+
+      bikeSchedules.forEach((schedule) => {
+        if (isOverdue) return; // Skip if we already know it's overdue
+
+        const relatedLogs = bikeLogs.filter((l) => l.task_category === schedule.task_category);
+
+        if (relatedLogs.length === 0) {
+          isOverdue = true; // No logs at all? Overdue!
+          return;
+        }
+
+        if (schedule.interval_distance) {
+          const highestOdoLog = [...relatedLogs].sort(
+            (a, b) => b.odometer_at_service - a.odometer_at_service,
+          )[0];
+          const safeCurrentOdo = Math.max(bike.current_odometer, highestOdoLog.odometer_at_service);
+          if (
+            schedule.interval_distance - (safeCurrentOdo - highestOdoLog.odometer_at_service) <=
+            0
+          ) {
+            isOverdue = true;
+          }
+        }
+
+        if (schedule.interval_days) {
+          const mostRecentLog = [...relatedLogs].sort(
+            (a, b) => new Date(b.service_date).getTime() - new Date(a.service_date).getTime(),
+          )[0];
+          const diffDays = Math.ceil(
+            Math.abs(new Date().getTime() - new Date(mostRecentLog.service_date).getTime()) /
+              (1000 * 60 * 60 * 24),
+          );
+          if (schedule.interval_days - diffDays <= 0) {
+            isOverdue = true;
+          }
+        }
+      });
+
+      return { ...bike, hasAlert: isOverdue };
+    });
+
+    setBikes(bikesWithAlerts);
     setLoading(false);
   };
 
   const renderBikeCard = ({ item }: { item: any }) => (
     <TouchableOpacity style={styles.bikeCard} onPress={() => router.push(`/bike/${item.id}`)}>
-      {item.nickname && <Text style={styles.bikeNickname}>"{item.nickname}"</Text>}
-      <Text style={styles.bikeTitle}>
-        {item.make} {item.model}
-      </Text>
+      <View
+        style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}
+      >
+        <View style={{ flex: 1 }}>
+          {item.nickname && <Text style={styles.bikeNickname}>"{item.nickname}"</Text>}
+          <Text style={styles.bikeTitle}>
+            {item.make} {item.model}
+          </Text>
+        </View>
 
-      {/* Updated row with the speedometer icon */}
+        {/* THE NEW ALERT BADGE */}
+        {item.hasAlert && (
+          <View style={styles.alertBadge}>
+            <Ionicons name="warning" size={12} color="#fff" style={{ marginRight: 4 }} />
+            <Text style={styles.alertText}>SERVICE DUE</Text>
+          </View>
+        )}
+      </View>
+
       <View style={styles.detailsRow}>
         <Text style={styles.bikeDetails}>Year: {item.year} | </Text>
         <Ionicons name="speedometer-outline" size={14} color="#888" style={{ marginRight: 4 }} />
@@ -76,7 +149,6 @@ export default function GarageScreen() {
         <ActivityIndicator size="large" color="#ff6600" style={{ marginTop: 40 }} />
       ) : bikes.length === 0 ? (
         <View style={styles.emptyState}>
-          {/* The new massive ghosted background icon */}
           <MaterialCommunityIcons
             name="motorbike"
             size={80}
@@ -119,9 +191,19 @@ const styles = StyleSheet.create({
   },
   bikeTitle: { color: '#ffffff', fontSize: 20, fontWeight: 'bold', marginBottom: 6 },
 
-  // Align the details text and the speedometer icon horizontally
-  detailsRow: { flexDirection: 'row', alignItems: 'center' },
+  detailsRow: { flexDirection: 'row', alignItems: 'center', marginTop: 4 },
   bikeDetails: { color: '#888888', fontSize: 14 },
+
+  alertBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ff4444',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    marginLeft: 12,
+  },
+  alertText: { color: '#ffffff', fontSize: 10, fontWeight: 'bold' },
 
   floatingButton: {
     backgroundColor: '#ff6600',
