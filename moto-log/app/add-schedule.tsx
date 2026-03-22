@@ -14,7 +14,11 @@ import { Picker } from '@react-native-picker/picker';
 import { supabase } from '../lib/supabase';
 import { useSettings } from '../context/SettingsContext';
 import { Ionicons } from '@expo/vector-icons';
-import { scheduleMaintenanceAlert, cancelMaintenanceAlert } from '../lib/notifications';
+import {
+  scheduleMaintenanceAlert,
+  cancelMaintenanceAlert,
+  registerForPushNotificationsAsync,
+} from '../lib/notifications';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 
 export default function AddScheduleScreen() {
@@ -75,6 +79,7 @@ export default function AddScheduleScreen() {
       }
 
       if (days && savedScheduleId) {
+        await registerForPushNotificationsAsync();
         const { data: bike } = await supabase
           .from('motorcycles')
           .select('make, model')
