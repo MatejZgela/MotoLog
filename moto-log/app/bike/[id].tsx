@@ -9,17 +9,18 @@ import {
   Image,
   Modal,
   Alert,
-  TextInput, // <-- NEW IMPORT
+  TextInput,
   Platform,
 } from 'react-native';
 import { useLocalSearchParams, useRouter, useFocusEffect, Stack } from 'expo-router';
-import { supabase } from '../../lib/supabase';
-import { useSettings } from '../../context/SettingsContext';
 import { Ionicons } from '@expo/vector-icons';
 import { Swipeable } from 'react-native-gesture-handler';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system/legacy';
+import { useSettings } from '../../context/SettingsContext';
+import { supabase } from '../../lib/supabase';
+
 // --- SUB-COMPONENT: The Expandable Log Card ---
 const LogCardItem = ({ item, unit, onEdit, onDelete, onImageTap }: any) => {
   const [expanded, setExpanded] = useState(false);
@@ -213,6 +214,9 @@ export default function BikeProfileScreen() {
   const [loading, setLoading] = useState(true);
   const [fullScreenImage, setFullScreenImage] = useState<string | null>(null);
 
+  // --- NEW: Paywall State ---
+  const [isPro, setIsPro] = useState(false);
+
   // --- SEARCH & SORT STATE ---
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [hasMoreLogs, setHasMoreLogs] = useState(true);
@@ -222,17 +226,31 @@ export default function BikeProfileScreen() {
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const LOGS_PER_PAGE = 8;
 
-  // The 500ms Debouncer for the search input
   useEffect(() => {
     const handler = setTimeout(() => setDebouncedQuery(searchQuery), 500);
     return () => clearTimeout(handler);
   }, [searchQuery]);
 
-  // Initial Fetch: Bike and Schedules ONLY
+  // Initial Fetch: Bike, Schedules, AND Profile Status
   useFocusEffect(
     useCallback(() => {
-      const fetchBikeAndSchedules = async () => {
+      const fetchInitialData = async () => {
         setLoading(true);
+
+        // 1. Get user profile status
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        if (user) {
+          const { data: profile } = await supabase
+            .from('profiles')
+            .select('is_pro')
+            .eq('id', user.id)
+            .single();
+          if (profile) setIsPro(profile.is_pro);
+        }
+
+        // 2. Get Bike
         const { data: bikeData } = await supabase
           .from('motorcycles')
           .select('*')
@@ -240,20 +258,22 @@ export default function BikeProfileScreen() {
           .single();
         if (bikeData) setBike(bikeData);
 
+        // 3. Get Schedules
         const { data: schedData } = await supabase
           .from('maintenance_schedules')
           .select('*')
           .eq('motorcycle_id', id);
         if (schedData) setSchedules(schedData);
+
         setLoading(false);
       };
-      fetchBikeAndSchedules();
+
+      fetchInitialData();
     }, [id]),
   );
 
-  // The Master Log Fetcher (Listens to Sort & Search changes)
   useEffect(() => {
-    if (bike) fetchLogs(true); // 'true' forces a reset to page 0
+    if (bike) fetchLogs(true);
   }, [debouncedQuery, sortOrder, bike]);
 
   const fetchLogs = async (isReset = false) => {
@@ -262,7 +282,6 @@ export default function BikeProfileScreen() {
     setIsLoadingMore(true);
     const currentLength = isReset ? 0 : logs.length;
 
-    // 1. Build the base query with the active sort order
     let query = supabase
       .from('maintenance_logs')
       .select('*')
@@ -270,12 +289,10 @@ export default function BikeProfileScreen() {
       .order('service_date', { ascending: sortOrder === 'asc' })
       .order('created_at', { ascending: sortOrder === 'asc' });
 
-    // 2. Attach the search filter if they typed something
     if (debouncedQuery) {
       query = query.or(`task_category.ilike.%${debouncedQuery}%,notes.ilike.%${debouncedQuery}%`);
     }
 
-    // 3. Execute with pagination
     const { data: nextBatch } = await query.range(currentLength, currentLength + LOGS_PER_PAGE - 1);
 
     if (nextBatch && nextBatch.length > 0) {
@@ -290,6 +307,22 @@ export default function BikeProfileScreen() {
   };
 
   const generatePDF = async () => {
+    // --- NEW: Paywall Interceptor ---
+    if (!isPro) {
+      Alert.alert(
+        'Moto Log Pro Required 🛑',
+        'Exporting your service history to PDF is a premium feature.\n\nUpgrade to Pro to generate professional, shareable reports for buyers or your own records!',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Upgrade to Pro',
+            onPress: () => Alert.alert('Coming Soon', 'RevenueCat paywall coming next!'),
+          },
+        ],
+      );
+      return;
+    }
+
     try {
       setIsLoadingMore(true);
 
@@ -357,22 +390,18 @@ export default function BikeProfileScreen() {
         </html>
       `;
 
-      // 1. Generate the raw PDF
       const { uri } = await Print.printToFileAsync({ html: htmlContent });
 
-      // 2. Create a clean file name
       const cleanMake = bike.make.replace(/[^a-zA-Z0-9]/g, '');
       const cleanModel = bike.model.replace(/[^a-zA-Z0-9]/g, '');
       const fileName = `${cleanMake}_${cleanModel}_Service_History.pdf`;
       const newUri = `${FileSystem.documentDirectory}${fileName}`;
 
-      // 3. Move the file from the temp cache to our nicely named file
       await FileSystem.moveAsync({
         from: uri,
         to: newUri,
       });
 
-      // 4. Handle Save vs Share based on the OS
       if (Platform.OS === 'android') {
         Alert.alert(
           'Export Report',
@@ -418,7 +447,6 @@ export default function BikeProfileScreen() {
           ],
         );
       } else {
-        // iOS naturally handles both sharing and saving in its single share sheet
         const canShare = await Sharing.isAvailableAsync();
         if (canShare) {
           await Sharing.shareAsync(newUri, { UTI: 'public.pdf', mimeType: 'application/pdf' });
@@ -439,7 +467,6 @@ export default function BikeProfileScreen() {
         text: 'Delete',
         style: 'destructive',
         onPress: async () => {
-          // 1. Delete attached images from Storage
           const urls = [log.image_before_url, log.image_after_url, log.receipt_image_url].filter(
             Boolean,
           );
@@ -447,8 +474,6 @@ export default function BikeProfileScreen() {
             const fileNames = urls.map((url) => url.split('/').pop());
             await supabase.storage.from('maintenance-photos').remove(fileNames);
           }
-
-          // 2. Delete the log from the Database
           await supabase.from('maintenance_logs').delete().eq('id', log.id);
           fetchLogs(true);
         },
@@ -573,7 +598,6 @@ export default function BikeProfileScreen() {
           keyExtractor={(item) => item.id}
           showsVerticalScrollIndicator={false}
           ListFooterComponent={ListFooter}
-          /* INLINED HEADER: Crucial to prevent keyboard from closing while searching */
           ListHeaderComponent={
             <View>
               <View style={styles.headerCard}>
@@ -662,7 +686,6 @@ export default function BikeProfileScreen() {
                 </View>
               )}
 
-              {/* SEARCH & SORT HEADER */}
               <View
                 style={{
                   flexDirection: 'row',
@@ -674,7 +697,6 @@ export default function BikeProfileScreen() {
                 <Text style={[styles.sectionTitle, { marginBottom: 0 }]}>SERVICE HISTORY</Text>
 
                 <View style={{ flexDirection: 'row', gap: 16, alignItems: 'center' }}>
-                  {/* NEW: PDF Export Button */}
                   <TouchableOpacity onPress={generatePDF}>
                     <Ionicons name="document-text" size={20} color="#ff6600" />
                   </TouchableOpacity>
@@ -748,7 +770,7 @@ export default function BikeProfileScreen() {
               onImageTap={setFullScreenImage}
             />
           )}
-          onEndReached={() => fetchLogs(false)} // Pass false so it knows it's an infinite scroll fetch, not a reset
+          onEndReached={() => fetchLogs(false)}
           onEndReachedThreshold={0.5}
         />
 
@@ -799,7 +821,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   errorText: { color: '#ff4444', fontSize: 18 },
-
   headerCard: {
     backgroundColor: '#1c1c1e',
     padding: 20,
@@ -816,7 +837,6 @@ const styles = StyleSheet.create({
   },
   bikeTitle: { color: '#ffffff', fontSize: 24, fontWeight: 'bold' },
   bikeDetails: { color: '#888888', fontSize: 16 },
-
   sectionTitle: {
     color: '#ffffff',
     fontSize: 14,
@@ -826,7 +846,6 @@ const styles = StyleSheet.create({
   },
   emptyState: { alignItems: 'center', marginTop: 40 },
   subText: { color: '#888888', fontSize: 16 },
-
   searchContainer: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -839,14 +858,11 @@ const styles = StyleSheet.create({
     borderColor: '#333',
   },
   searchInput: { flex: 1, color: '#fff', fontSize: 14 },
-
   statusText: { fontSize: 14, fontWeight: 'bold', marginTop: 8 },
   logHeader: { marginBottom: 0 },
   logTask: { color: '#ffffff', fontSize: 18, fontWeight: 'bold', marginBottom: 4 },
   logDetails: { color: '#888888', fontSize: 14 },
-
   swipeText: { color: '#fff', fontWeight: 'bold', fontSize: 12, marginTop: 4 },
-
   logPhotosContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: '4%', marginTop: 8 },
   photoWrapper: { width: '30%', marginBottom: 8 },
   photoLabel: {
@@ -857,7 +873,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   logImage: { width: '100%', aspectRatio: 1, borderRadius: 8, backgroundColor: '#2c2c2e' },
-
   floatingButton: {
     backgroundColor: '#ff6600',
     padding: 16,
@@ -871,7 +886,6 @@ const styles = StyleSheet.create({
     right: 20,
   },
   floatingButtonText: { color: '#ffffff', fontSize: 16, fontWeight: 'bold' },
-
   modalBackground: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.9)',
@@ -891,7 +905,6 @@ const styles = StyleSheet.create({
   },
   closeButtonText: { color: '#ff6600', fontSize: 16, fontWeight: 'bold' },
   fullScreenImage: { width: '100%', height: '80%' },
-
   notesContainer: {
     backgroundColor: '#2c2c2e',
     padding: 12,
@@ -901,9 +914,7 @@ const styles = StyleSheet.create({
   },
   costText: { color: '#4CAF50', fontWeight: 'bold', fontSize: 14 },
   notesText: { color: '#cccccc', fontStyle: 'italic', fontSize: 14, flexShrink: 1 },
-
   logCard: { backgroundColor: '#1c1c1e', padding: 16, borderRadius: 8 },
-
   scheduleCard: {
     backgroundColor: '#1c1c1e',
     padding: 16,
@@ -917,7 +928,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginLeft: 16,
   },
-
   deleteSwipeBtn: {
     backgroundColor: '#ff4444',
     justifyContent: 'center',
@@ -927,7 +937,6 @@ const styles = StyleSheet.create({
     marginLeft: 8,
     alignSelf: 'stretch',
   },
-
   editSwipeBtn: {
     backgroundColor: '#4CAF50',
     justifyContent: 'center',

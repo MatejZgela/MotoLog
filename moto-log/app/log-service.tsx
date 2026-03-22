@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -39,6 +39,25 @@ export default function LogServiceScreen() {
   const [receiptImage, setReceiptImage] = useState<string | null>(null);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isPro, setIsPro] = useState(false); // NEW: Paywall State
+
+  // NEW: Fetch Pro status on mount
+  useEffect(() => {
+    const checkProStatus = async () => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (user) {
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('is_pro')
+          .eq('id', user.id)
+          .single();
+        if (profile) setIsPro(profile.is_pro);
+      }
+    };
+    checkProStatus();
+  }, []);
 
   const handleDateChange = (event: any, selectedDate?: Date) => {
     setShowDatePicker(false);
@@ -46,6 +65,22 @@ export default function LogServiceScreen() {
   };
 
   const handleImagePick = (type: 'before' | 'after' | 'receipt') => {
+    // NEW: Paywall Interceptor
+    if (!isPro) {
+      Alert.alert(
+        'Moto Log Pro Required 🛑',
+        'Attaching photos and receipts is a premium feature.\n\nUpgrade to Pro to keep a complete visual history of your motorcycle!',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Upgrade to Pro',
+            onPress: () => Alert.alert('Coming Soon', 'RevenueCat paywall coming next!'),
+          },
+        ],
+      );
+      return;
+    }
+
     Alert.alert('Add Evidence', 'Choose a photo source', [
       { text: 'Take Photo', onPress: () => openCamera(type) },
       { text: 'Choose from Gallery', onPress: () => openGallery(type) },
