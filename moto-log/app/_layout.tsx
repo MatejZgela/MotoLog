@@ -1,3 +1,4 @@
+import * as Sentry from '@sentry/react-native';
 import { useEffect, useState } from 'react';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { supabase } from '../lib/supabase';
@@ -9,10 +10,17 @@ import { SettingsProvider } from '../context/SettingsContext'; // Added for glob
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { registerForPushNotificationsAsync } from '../lib/notifications';
 import { LogBox } from 'react-native';
+
+Sentry.init({
+  dsn: 'https://ee2729a64bdcfcd7abc30c946130e868@o4511089449107456.ingest.de.sentry.io/4511089464639568',
+  debug: false,
+  tracesSampleRate: 1.0,
+});
+
 //TODO: remove this line after real testing starts: Silence the Expo Go notification warning
 LogBox.ignoreLogs(['expo-notifications: Android Push notifications']);
 
-export default function RootLayout() {
+function RootLayout() {
   const [session, setSession] = useState<Session | null>(null);
   const [isInitialized, setIsInitialized] = useState(false);
   const router = useRouter();
@@ -109,3 +117,5 @@ export default function RootLayout() {
     </GestureHandlerRootView>
   );
 }
+
+export default Sentry.wrap(RootLayout);

@@ -13,6 +13,7 @@
     "@react-native-async-storage/async-storage": "^2.2.0",
     "@react-native-community/datetimepicker": "8.4.4",
     "@react-native-picker/picker": "2.11.1",
+    "@sentry/react-native": "^8.5.0",
     "@supabase/supabase-js": "^2.99.3",
     "expo": "^54.0.0",
     "expo-camera": "~17.0.10",
