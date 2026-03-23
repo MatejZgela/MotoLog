@@ -67,8 +67,18 @@
 ### 🔒 **Secure Authentication**
 
 - Email/password authentication with Supabase
+- Email confirmation for new account registration
+- Password reset via secure email recovery links
 - Secure session management with auto-refresh tokens
 - Account deletion with complete data removal
+
+### 📊 **Error Monitoring & Analytics**
+
+- Real-time error tracking with Sentry
+- Session replay for debugging user issues
+- User feedback integration
+- Performance monitoring and tracing
+- Automated crash reporting
 
 ---
 
@@ -89,15 +99,22 @@
   - Authentication & user management
   - Storage for maintenance photos
   - Real-time subscriptions
+- **Sentry** - Error monitoring and performance tracking
+  - Real-time crash reporting
+  - Session replay
+  - User feedback collection
+  - Performance tracing
 
 ### **Key Libraries**
 
 - `@supabase/supabase-js` - Database and auth client
+- `@sentry/react-native` - Error monitoring and analytics
 - `expo-notifications` - Push notification scheduling
 - `expo-camera` & `expo-image-picker` - Photo capture/selection
 - `expo-print` & `expo-sharing` - PDF generation and sharing
 - `@react-native-async-storage/async-storage` - Local data persistence
 - `react-native-keyboard-aware-scroll-view` - Improved form UX
+- `@react-native-community/datetimepicker` - Native date pickers
 
 ---
 
@@ -319,13 +336,38 @@ MotoLog uses a Supabase PostgreSQL database with three core tables:
    const supabasePublishableKey = 'YOUR_SUPABASE_ANON_KEY';
    ```
 
-4. **Start the development server**
+   d. Configure email templates in Supabase:
+   - Go to Authentication > Email Templates
+   - Update the "Confirm signup" and "Reset password" templates
+   - Set redirect URLs to your app's deep link scheme
+
+4. **Set up Sentry (Optional but Recommended)**
+
+   a. Create a new project at [sentry.io](https://sentry.io)
+
+   b. Update `app/_layout.tsx` with your Sentry DSN:
+
+   ```typescript
+   Sentry.init({
+     dsn: 'YOUR_SENTRY_DSN',
+     debug: false,
+     tracesSampleRate: 1.0,
+   });
+   ```
+
+   c. For production builds, set the Sentry auth token:
+
+   ```bash
+   eas env:create --name SENTRY_AUTH_TOKEN --value "your-token" --scope project --visibility secret --environment production
+   ```
+
+5. **Start the development server**
 
    ```bash
    npm start
    ```
 
-5. **Run on your device**
+6. **Run on your device**
    - Scan the QR code with Expo Go (iOS) or the Expo app (Android)
    - Or press `i` for iOS Simulator / `a` for Android Emulator
 
@@ -362,13 +404,19 @@ eas submit -p android
 
 ## 🎯 Usage Guide
 
+### **Getting Started with MotoLog**
+
+1. **Sign Up**: Enter your email and password, then tap "SIGN UP"
+2. **Verify Email**: Check your inbox for a confirmation email and click the link
+3. **Login**: Return to the app and sign in with your credentials
+4. **Forgot Password?**: Tap "Forgot Password?" on the login screen, enter your email, and follow the reset link sent to your inbox
+
 ### **Adding Your First Motorcycle**
 
-1. Launch the app and sign up/login
-2. Tap the "Add Motorcycle" button
-3. Enter make, model, year, and current odometer
-4. Optionally add a nickname
-5. Save to add to your garage
+1. Tap the "Add Motorcycle" button on the garage screen
+2. Enter make, model, year, and current odometer
+3. Optionally add a nickname for easy identification
+4. Save to add to your garage
 
 ### **Logging Maintenance**
 
@@ -408,9 +456,10 @@ eas submit -p android
 ```
 moto-log/
 ├── app/                      # Expo Router file-based navigation
-│   ├── _layout.tsx           # Root layout with auth guard
+│   ├── _layout.tsx           # Root layout with auth guard & Sentry
 │   ├── index.tsx             # Garage screen (home)
 │   ├── login.tsx             # Authentication screen
+│   ├── reset-password.tsx    # Password reset screen
 │   ├── add-bike.tsx          # Add motorcycle form
 │   ├── edit-bike.tsx         # Edit motorcycle form
 │   ├── log-service.tsx       # Add maintenance log
@@ -456,6 +505,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 - Built with [Expo](https://expo.dev)
 - Backend powered by [Supabase](https://supabase.com)
+- Error monitoring by [Sentry](https://sentry.io)
 - Icons from [@expo/vector-icons](https://icons.expo.fyi)
 
 ---
