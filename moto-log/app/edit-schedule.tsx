@@ -14,13 +14,19 @@ import { Picker } from '@react-native-picker/picker';
 import { supabase } from '../lib/supabase';
 import { useSettings } from '../context/SettingsContext';
 import { Ionicons } from '@expo/vector-icons';
-import { scheduleMaintenanceAlert, cancelMaintenanceAlert } from '../lib/notifications';
+import {
+  scheduleMaintenanceAlert,
+  cancelMaintenanceAlert,
+  registerForPushNotificationsAsync, // 🔥 ADDED THIS
+} from '../lib/notifications';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 
 export default function EditScheduleScreen() {
   const router = useRouter();
   const { schedId, bikeId } = useLocalSearchParams();
-  const { unit } = useSettings();
+
+  // 🔥 EXTRACTED alertTime FROM SETTINGS
+  const { unit, alertTime } = useSettings();
 
   const [task, setTask] = useState('Engine Oil');
   const [distance, setDistance] = useState('');
@@ -72,6 +78,9 @@ export default function EditScheduleScreen() {
 
       if (schedId) {
         if (days) {
+          // 🔥 MAKE SURE WE HAVE PERMISSION BEFORE SCHEDULING
+          await registerForPushNotificationsAsync();
+
           const { data: bike } = await supabase
             .from('motorcycles')
             .select('make, model')
@@ -80,7 +89,14 @@ export default function EditScheduleScreen() {
 
           const bikeName = bike ? `${bike.make} ${bike.model}` : 'your bike';
 
-          await scheduleMaintenanceAlert(schedId as string, bikeName, task, parseInt(days));
+          // 🔥 PASSED alertTime INTO THE FUNCTION
+          await scheduleMaintenanceAlert(
+            schedId as string,
+            bikeName,
+            task,
+            parseInt(days),
+            alertTime,
+          );
         } else {
           await cancelMaintenanceAlert(schedId as string);
         }

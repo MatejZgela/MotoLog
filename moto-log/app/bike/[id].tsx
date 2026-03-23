@@ -461,24 +461,65 @@ export default function BikeProfileScreen() {
   };
 
   const handleDeleteLog = (log: any) => {
-    Alert.alert('Delete Log', 'Remove this record and its photos?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: async () => {
-          const urls = [log.image_before_url, log.image_after_url, log.receipt_image_url].filter(
-            Boolean,
-          );
-          if (urls.length > 0) {
-            const fileNames = urls.map((url) => url.split('/').pop());
-            await supabase.storage.from('maintenance-photos').remove(fileNames);
-          }
-          await supabase.from('maintenance_logs').delete().eq('id', log.id);
-          fetchLogs(true);
-        },
-      },
-    ]);
+    // 1. Calculate what the highest odometer would be WITHOUT this log
+    const remainingLogs = logs.filter((l) => l.id !== log.id);
+    const nextHighestOdo =
+      remainingLogs.length > 0
+        ? Math.max(...remainingLogs.map((l) => l.odometer_at_service))
+        : null;
+
+    // 2. Check if the log being deleted is the one currently holding the "High Score"
+    const isTopOdometer = log.odometer_at_service === bike.current_odometer;
+
+    // 3. The Deletion Engine
+    const performDelete = async (rollbackOdometerTo: number | null) => {
+      // A. Delete Photos from Storage
+      const urls = [log.image_before_url, log.image_after_url, log.receipt_image_url].filter(
+        Boolean,
+      );
+      if (urls.length > 0) {
+        const fileNames = urls.map((url) => url.split('/').pop());
+        await supabase.storage.from('maintenance-photos').remove(fileNames);
+      }
+
+      // B. Delete the Log from Database
+      await supabase.from('maintenance_logs').delete().eq('id', log.id);
+
+      // C. Rollback the Bike's Odometer (If the user requested it)
+      if (rollbackOdometerTo !== null) {
+        await supabase
+          .from('motorcycles')
+          .update({ current_odometer: rollbackOdometerTo })
+          .eq('id', bike.id);
+
+        // Update local state instantly so the UI doesn't lag
+        setBike({ ...bike, current_odometer: rollbackOdometerTo });
+      }
+
+      // Refresh the list
+      fetchLogs(true);
+    };
+
+    // 4. The Logic Tree
+    if (isTopOdometer && nextHighestOdo !== null && nextHighestOdo < bike.current_odometer) {
+      // SCENARIO A: They are deleting the highest log. Give them the choice with a warning!
+      Alert.alert(
+        'Odometer Rollback',
+        `This log set your bike to ${log.odometer_at_service} ${unit}.\n\nDo you want to roll back to your last logged service (${nextHighestOdo} ${unit})?\n\n(Note: If you recently updated your odometer manually, choose "Keep" and edit your bike profile).`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Keep Current',
+            onPress: () => performDelete(null),
+          },
+          {
+            text: `Rollback to ${nextHighestOdo} ${unit}`,
+            style: 'destructive',
+            onPress: () => performDelete(nextHighestOdo),
+          },
+        ],
+      );
+    }
   };
 
   const handleDeleteSchedule = (schedId: string) => {
@@ -506,9 +547,10 @@ export default function BikeProfileScreen() {
       return { text: 'No logs found. Do this ASAP.', color: '#ff4444' };
     }
 
-    let statusText = [];
-    let isOverdue = false;
+    let milesLeft: number | null = null;
+    let daysLeft: number | null = null;
 
+    // 1. Calculate Distance
     if (schedule.interval_distance) {
       const highestOdoLog = [...relatedLogs].sort(
         (a, b) => b.odometer_at_service - a.odometer_at_service,
@@ -518,29 +560,56 @@ export default function BikeProfileScreen() {
         highestOdoLog.odometer_at_service,
       );
       const milesSince = safeCurrentOdometer - highestOdoLog.odometer_at_service;
-      const milesLeft = schedule.interval_distance - milesSince;
-
-      if (milesLeft <= 0) isOverdue = true;
-      statusText.push(
-        milesLeft <= 0 ? `${Math.abs(milesLeft)} ${unit} OVERDUE` : `Due in ${milesLeft} ${unit}`,
-      );
+      milesLeft = schedule.interval_distance - milesSince;
     }
 
+    // 2. Calculate Time
     if (schedule.interval_days) {
-      const mostRecentDateLog = relatedLogs[0];
+      // 🔥 BUG FIX: Explicitly sort by date descending to ensure we ALWAYS get the newest log,
+      // even if the user changed the global sort order to "OLDEST" on the UI!
+      const sortedByDate = [...relatedLogs].sort(
+        (a, b) => new Date(b.service_date).getTime() - new Date(a.service_date).getTime(),
+      );
+      const mostRecentDateLog = sortedByDate[0];
+
       const lastDate = new Date(mostRecentDateLog.service_date);
       const today = new Date();
       const diffTime = Math.abs(today.getTime() - lastDate.getTime());
       const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-      const daysLeft = schedule.interval_days - diffDays;
-
-      if (daysLeft <= 0) isOverdue = true;
-      statusText.push(
-        daysLeft <= 0 ? `${Math.abs(daysLeft)} days OVERDUE` : `Due in ${daysLeft} days`,
-      );
+      daysLeft = schedule.interval_days - diffDays;
     }
 
-    return { text: statusText.join(' OR '), color: isOverdue ? '#ff4444' : '#4CAF50' };
+    // 3. The "Whichever Comes First" Logic
+    const distOverdue = milesLeft !== null && milesLeft <= 0;
+    const timeOverdue = daysLeft !== null && daysLeft <= 0;
+    const isOverdue = distOverdue || timeOverdue;
+
+    // OVERDUE STATES
+    if (isOverdue) {
+      if (distOverdue && timeOverdue) {
+        // State 3: Both are overdue
+        return {
+          text: `OVERDUE by ${Math.abs(milesLeft!)} ${unit} & ${Math.abs(daysLeft!)} days`,
+          color: '#ff4444',
+        };
+      } else if (distOverdue) {
+        // State 1: Only distance is overdue
+        return { text: `OVERDUE by ${Math.abs(milesLeft!)} ${unit}`, color: '#ff4444' };
+      } else {
+        // State 2: Only time is overdue
+        return { text: `OVERDUE by ${Math.abs(daysLeft!)} days`, color: '#ff4444' };
+      }
+    }
+    // HEALTHY STATES
+    else {
+      if (milesLeft !== null && daysLeft !== null) {
+        return { text: `Due in ${milesLeft} ${unit} or ${daysLeft} days`, color: '#4CAF50' };
+      } else if (milesLeft !== null) {
+        return { text: `Due in ${milesLeft} ${unit}`, color: '#4CAF50' };
+      } else {
+        return { text: `Due in ${daysLeft} days`, color: '#4CAF50' };
+      }
+    }
   };
 
   if (loading)

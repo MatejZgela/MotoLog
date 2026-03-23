@@ -2,7 +2,6 @@ import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import { Platform } from 'react-native';
 
-// Tell the app how to handle notifications if the user has the app open
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert: true,
@@ -13,11 +12,8 @@ Notifications.setNotificationHandler({
   }),
 });
 
-//TODO: this functions has been wrapped because expo go was going crazy because we wanted to send notification, remove after real testing starts
-
 export async function registerForPushNotificationsAsync() {
   try {
-    // This is the native code Expo Go hates. We wrap it in a try/catch.
     if (Platform.OS === 'android') {
       await Notifications.setNotificationChannelAsync('maintenance', {
         name: 'Maintenance Alerts',
@@ -44,7 +40,6 @@ export async function registerForPushNotificationsAsync() {
       console.log('Must use physical device for Push Notifications');
     }
   } catch (error) {
-    // Catch the Expo Go limitation gracefully
     console.log(
       "Expo Go limitation hit: Notifications won't fully work until you use a Development Build.",
     );
@@ -54,32 +49,28 @@ export async function registerForPushNotificationsAsync() {
   return true;
 }
 
-/**
- * Schedules a primary alert and a "Gentle Nag" 7 days later.
- */
 export async function scheduleMaintenanceAlert(
   scheduleId: string,
   bikeName: string,
   taskCategory: string,
   daysUntilDue: number,
+  preferredTime: { hour: number; minute: number } = { hour: 10, minute: 0 }, // <-- New parameter added!
 ) {
   try {
-    // 1. Check if we actually have permission before asking the OS to do work
     const { status } = await Notifications.getPermissionsAsync();
     if (status !== 'granted') {
       console.log(`Push permissions denied. Skipping lock-screen alerts for ${taskCategory}.`);
       return;
     }
 
-    // 2. Cancel old ones so we don't spam them
     await cancelMaintenanceAlert(scheduleId);
 
-    if (daysUntilDue <= 0) return; // Don't schedule in the past!
+    if (daysUntilDue <= 0) return;
 
-    // 3. The Primary Alert
+    // 1. The Primary Alert (using custom time)
     const primaryTrigger = new Date();
     primaryTrigger.setDate(primaryTrigger.getDate() + daysUntilDue);
-    primaryTrigger.setHours(10, 0, 0, 0); // Fire at 10:00 AM
+    primaryTrigger.setHours(preferredTime.hour, preferredTime.minute, 0, 0); // Apply User Setting
 
     await Notifications.scheduleNotificationAsync({
       content: {
@@ -88,15 +79,16 @@ export async function scheduleMaintenanceAlert(
         sound: true,
       },
       trigger: {
-        type: Notifications.SchedulableTriggerInputTypes.DATE, // <-- TS Fix!
+        type: Notifications.SchedulableTriggerInputTypes.DATE,
         date: primaryTrigger,
       },
       identifier: `primary_${scheduleId}`,
     });
 
-    // 4. The Gentle Nag (7 days later)
+    // 2. The Gentle Nag (7 days later at the exact same custom time)
     const nagTrigger = new Date(primaryTrigger);
     nagTrigger.setDate(nagTrigger.getDate() + 7);
+    // No need to set hours here, it inherited them from primaryTrigger!
 
     await Notifications.scheduleNotificationAsync({
       content: {
@@ -105,22 +97,16 @@ export async function scheduleMaintenanceAlert(
         sound: true,
       },
       trigger: {
-        type: Notifications.SchedulableTriggerInputTypes.DATE, // <-- TS Fix!
+        type: Notifications.SchedulableTriggerInputTypes.DATE,
         date: nagTrigger,
       },
       identifier: `nag_${scheduleId}`,
     });
-
-    console.log(`Scheduled alerts for ${taskCategory} in ${daysUntilDue} days.`);
   } catch (error) {
-    // If anything fails at the OS level, catch it so the app doesn't crash
     console.error('Failed to schedule notification:', error);
   }
 }
 
-/**
- * Cancels both the primary and nag alerts for a specific schedule.
- */
 export async function cancelMaintenanceAlert(scheduleId: string) {
   try {
     await Notifications.cancelScheduledNotificationAsync(`primary_${scheduleId}`);

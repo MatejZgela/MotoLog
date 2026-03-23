@@ -1,12 +1,15 @@
-import { View, Text, StyleSheet, TouchableOpacity, Alert, Switch } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Alert, Switch, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
 import { supabase } from '../lib/supabase';
 import { useSettings } from '../context/SettingsContext';
 import { Ionicons } from '@expo/vector-icons';
+import { useState } from 'react';
+import DateTimePicker from '@react-native-community/datetimepicker';
 
 export default function SettingsScreen() {
   const router = useRouter();
-  const { unit, toggleUnit } = useSettings();
+  const { unit, toggleUnit, alertTime, setAlertTime } = useSettings();
+  const [showPicker, setShowPicker] = useState(false);
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
@@ -38,11 +41,29 @@ export default function SettingsScreen() {
     );
   };
 
+  // Helper to format the time nicely (e.g., "10:00 AM")
+  const formattedTime = new Date();
+  formattedTime.setHours(alertTime.hour, alertTime.minute);
+  const displayTime = formattedTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+  const onTimeChange = (event: any, selectedDate?: Date) => {
+    if (Platform.OS === 'android') {
+      setShowPicker(false); // Android requires us to manually hide it after selection
+    }
+    if (selectedDate) {
+      setAlertTime({
+        hour: selectedDate.getHours(),
+        minute: selectedDate.getMinutes(),
+      });
+    }
+  };
+
   return (
     <View style={styles.container}>
       <Text style={styles.sectionTitle}>PREFERENCES</Text>
 
       <View style={styles.card}>
+        {/* Distance Unit Row */}
         <View style={styles.row}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
             <Ionicons name="speedometer-outline" size={20} color="#888" />
@@ -59,7 +80,30 @@ export default function SettingsScreen() {
             <Text style={[styles.unitText, unit === 'km' && styles.unitActive]}>Km</Text>
           </View>
         </View>
+
+        <View style={styles.divider} />
+
+        {/* Alert Time Row */}
+        <View style={styles.row}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <Ionicons name="time-outline" size={20} color="#888" />
+            <Text style={styles.label}>Daily Alert Time</Text>
+          </View>
+          <TouchableOpacity style={styles.timeButton} onPress={() => setShowPicker(true)}>
+            <Text style={styles.timeButtonText}>{displayTime}</Text>
+          </TouchableOpacity>
+        </View>
       </View>
+
+      {/* The Native Picker (Invisible until triggered) */}
+      {showPicker && (
+        <DateTimePicker
+          value={formattedTime}
+          mode="time"
+          display="default"
+          onChange={onTimeChange}
+        />
+      )}
 
       <Text style={styles.sectionTitle}>ACCOUNT</Text>
 
@@ -87,10 +131,26 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
   },
   card: { backgroundColor: '#1c1c1e', padding: 16, borderRadius: 8 },
-  row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  row: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  divider: { height: 1, backgroundColor: '#333', marginVertical: 8 },
   label: { color: '#fff', fontSize: 16, fontWeight: '500' },
   unitText: { color: '#666', fontSize: 14, fontWeight: 'bold' },
   unitActive: { color: '#ff6600' },
+
+  timeButton: {
+    backgroundColor: '#121212',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#333',
+  },
+  timeButtonText: { color: '#ff6600', fontWeight: 'bold', fontSize: 14 },
 
   logoutButton: {
     backgroundColor: '#333',
@@ -102,7 +162,6 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   logoutText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
-
   deleteButton: {
     backgroundColor: 'rgba(255, 68, 68, 0.1)',
     borderWidth: 1,

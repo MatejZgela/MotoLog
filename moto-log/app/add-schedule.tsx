@@ -24,7 +24,8 @@ import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view
 export default function AddScheduleScreen() {
   const router = useRouter();
   const { bikeId } = useLocalSearchParams();
-  const { unit } = useSettings();
+  // 🔥 CHANGED: We are now pulling alertTime from your global settings
+  const { unit, alertTime } = useSettings();
 
   const [task, setTask] = useState('Engine Oil');
   const [distance, setDistance] = useState('');
@@ -88,7 +89,8 @@ export default function AddScheduleScreen() {
 
         const bikeName = bike ? `${bike.make} ${bike.model}` : 'your bike';
 
-        await scheduleMaintenanceAlert(savedScheduleId, bikeName, task, parseInt(days));
+        // 🔥 CHANGED: We are now passing alertTime as the final argument!
+        await scheduleMaintenanceAlert(savedScheduleId, bikeName, task, parseInt(days), alertTime);
       } else if (savedScheduleId) {
         await cancelMaintenanceAlert(savedScheduleId);
       }
