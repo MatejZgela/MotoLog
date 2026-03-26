@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "moto-log",
+    "name": "Moto Log",
     "slug": "moto-log",
     "version": "1.0.0",
     "plugins": [
@@ -46,10 +46,7 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "permissions": [
-        "android.permission.CAMERA",
-        "android.permission.RECORD_AUDIO"
-      ],
+      "permissions": ["android.permission.CAMERA", "android.permission.RECORD_AUDIO"],
       "package": "com.mz.motolog"
     },
     "web": {
