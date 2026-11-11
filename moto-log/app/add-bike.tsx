@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import {
   View,
   Text,
@@ -9,10 +9,12 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import { supabase } from '../lib/supabase';
 import { useSettings } from '../context/SettingsContext';
 import { Ionicons } from '@expo/vector-icons';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
+import { addBike } from '../lib/database';
+import 'react-native-get-random-values';
+import { v4 as uuidv4 } from 'uuid';
 
 export default function AddBikeScreen() {
   const router = useRouter();
@@ -25,65 +27,6 @@ export default function AddBikeScreen() {
   const [nickname, setNickname] = useState('');
 
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isCheckingLimit, setIsCheckingLimit] = useState(true); // NEW: Loading state for our check
-
-  // NEW: The Paywall Interceptor
-  useEffect(() => {
-    const checkGarageLimit = async () => {
-      try {
-        const {
-          data: { user },
-        } = await supabase.auth.getUser();
-        if (!user) return;
-
-        // 1. Check if user is Pro
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('is_pro')
-          .eq('id', user.id)
-          .single();
-
-        if (profile?.is_pro) {
-          setIsCheckingLimit(false);
-          return; // Pro users bypass the lock
-        }
-
-        // 2. If Free, count their current bikes
-        const { count } = await supabase
-          .from('motorcycles')
-          .select('*', { count: 'exact', head: true })
-          .eq('user_id', user.id);
-
-        if (count && count >= 1) {
-          // 3. Trigger the Paywall Alert
-          Alert.alert(
-            'Garage Full 🛑',
-            'Free accounts are limited to 1 motorcycle.\n\nUpgrade to Moto Log Pro to add unlimited bikes and unlock PDF logbook exports!',
-            [
-              { text: 'Cancel', style: 'cancel', onPress: () => router.back() },
-              {
-                text: 'Upgrade to Pro',
-                style: 'default',
-                onPress: () => {
-                  // We will map this to the real paywall screen in Phase 3!
-                  Alert.alert('Coming Soon', 'We are building the RevenueCat paywall next!');
-                  router.back();
-                },
-              },
-            ],
-          );
-        } else {
-          // Free user, but garage is empty. Let them in!
-          setIsCheckingLimit(false);
-        }
-      } catch (err) {
-        console.error('Limit Check Error:', err);
-        setIsCheckingLimit(false); // Failsafe: let them in if network blips
-      }
-    };
-
-    checkGarageLimit();
-  }, []);
 
   const handleSave = async () => {
     if (!make || !model || !odometer) {
@@ -94,23 +37,17 @@ export default function AddBikeScreen() {
     setIsSubmitting(true);
 
     try {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (!user) throw new Error('Could not find logged-in user.');
+      const newBike = {
+        id: uuidv4(),
+        nickname: nickname || null,
+        make: make,
+        model: model,
+        year: parseInt(year),
+        current_odometer: parseInt(odometer),
+        created_at: new Date().toISOString(),
+      };
 
-      const { error } = await supabase.from('motorcycles').insert([
-        {
-          user_id: user.id,
-          nickname: nickname || null,
-          make: make,
-          model: model,
-          year: parseInt(year),
-          current_odometer: parseInt(odometer),
-        },
-      ]);
-
-      if (error) throw error;
+      await addBike(newBike);
       router.back();
     } catch (error: any) {
       Alert.alert('Error', error.message);
@@ -118,15 +55,6 @@ export default function AddBikeScreen() {
       setIsSubmitting(false);
     }
   };
-
-  // Show a loading spinner while checking the database so the user doesn't see the form yet
-  if (isCheckingLimit) {
-    return (
-      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
-        <ActivityIndicator size="large" color="#ff6600" />
-      </View>
-    );
-  }
 
   return (
     <View style={styles.container}>

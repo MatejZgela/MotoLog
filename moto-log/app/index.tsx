@@ -8,9 +8,9 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
-import { supabase } from '../lib/supabase';
 import { useSettings } from '../context/SettingsContext';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { getAllBikes, getAllLogsForAllBikes, getAllSchedulesForAllBikes } from '../lib/database';
 
 export default function GarageScreen() {
   const router = useRouter();
@@ -25,91 +25,76 @@ export default function GarageScreen() {
     }, []),
   );
 
-  const fetchBikes = async () => {
+  const fetchBikes = () => {
     setLoading(true);
 
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    try {
+      const bikesData = getAllBikes();
 
-    if (!user) {
-      setLoading(false);
-      return;
-    }
+      if (!bikesData || bikesData.length === 0) {
+        setBikes([]);
+        setLoading(false);
+        return;
+      }
 
-    // 1. Fetch all bikes for the user
-    const { data: bikesData, error: bikesError } = await supabase
-      .from('motorcycles')
-      .select('*')
-      .eq('user_id', user.id)
-      .order('created_at', { ascending: false });
+      const allLogs = getAllLogsForAllBikes();
+      const allSchedules = getAllSchedulesForAllBikes();
 
-    if (bikesError || !bikesData || bikesData.length === 0) {
-      setBikes([]);
-      setLoading(false);
-      return;
-    }
+      const bikesWithAlerts = bikesData.map((bike) => {
+        const bikeSchedules = allSchedules.filter((s) => s.motorcycle_id === bike.id);
+        const bikeLogs = allLogs.filter((l) => l.motorcycle_id === bike.id);
+        let isOverdue = false;
 
-    const bikeIds = bikesData.map((b) => b.id);
+        bikeSchedules.forEach((schedule) => {
+          if (isOverdue) return;
 
-    // 2. Fetch all schedules and logs for these bikes
-    const { data: schedules } = await supabase
-      .from('maintenance_schedules')
-      .select('*')
-      .in('motorcycle_id', bikeIds);
-    const { data: logs } = await supabase
-      .from('maintenance_logs')
-      .select('*')
-      .in('motorcycle_id', bikeIds);
+          const relatedLogs = bikeLogs.filter((l) => l.task_category === schedule.task_category);
 
-    // 3. The Math Engine: Check if any bike is overdue
-    const bikesWithAlerts = bikesData.map((bike) => {
-      const bikeSchedules = schedules?.filter((s) => s.motorcycle_id === bike.id) || [];
-      const bikeLogs = logs?.filter((l) => l.motorcycle_id === bike.id) || [];
-      let isOverdue = false;
-
-      bikeSchedules.forEach((schedule) => {
-        if (isOverdue) return; // Skip if we already know it's overdue
-
-        const relatedLogs = bikeLogs.filter((l) => l.task_category === schedule.task_category);
-
-        if (relatedLogs.length === 0) {
-          isOverdue = true; // No logs at all? Overdue!
-          return;
-        }
-
-        if (schedule.interval_distance) {
-          const highestOdoLog = [...relatedLogs].sort(
-            (a, b) => b.odometer_at_service - a.odometer_at_service,
-          )[0];
-          const safeCurrentOdo = Math.max(bike.current_odometer, highestOdoLog.odometer_at_service);
-          if (
-            schedule.interval_distance - (safeCurrentOdo - highestOdoLog.odometer_at_service) <=
-            0
-          ) {
+          if (relatedLogs.length === 0) {
             isOverdue = true;
+            return;
           }
-        }
 
-        if (schedule.interval_days) {
-          const mostRecentLog = [...relatedLogs].sort(
-            (a, b) => new Date(b.service_date).getTime() - new Date(a.service_date).getTime(),
-          )[0];
-          const diffDays = Math.ceil(
-            Math.abs(new Date().getTime() - new Date(mostRecentLog.service_date).getTime()) /
-              (1000 * 60 * 60 * 24),
-          );
-          if (schedule.interval_days - diffDays <= 0) {
-            isOverdue = true;
+          if (schedule.interval_distance) {
+            const highestOdoLog = [...relatedLogs].sort(
+              (a, b) => b.odometer_at_service - a.odometer_at_service,
+            )[0];
+            const safeCurrentOdo = Math.max(
+              bike.current_odometer,
+              highestOdoLog.odometer_at_service,
+            );
+            if (
+              schedule.interval_distance - (safeCurrentOdo - highestOdoLog.odometer_at_service) <=
+              0
+            ) {
+              isOverdue = true;
+            }
           }
-        }
+
+          if (schedule.interval_days) {
+            const mostRecentLog = [...relatedLogs].sort(
+              (a, b) => new Date(b.service_date).getTime() - new Date(a.service_date).getTime(),
+            )[0];
+            const diffDays = Math.ceil(
+              Math.abs(new Date().getTime() - new Date(mostRecentLog.service_date).getTime()) /
+                (1000 * 60 * 60 * 24),
+            );
+            if (schedule.interval_days - diffDays <= 0) {
+              isOverdue = true;
+            }
+          }
+        });
+
+        return { ...bike, hasAlert: isOverdue };
       });
 
-      return { ...bike, hasAlert: isOverdue };
-    });
-
-    setBikes(bikesWithAlerts);
-    setLoading(false);
+      setBikes(bikesWithAlerts);
+      setLoading(false);
+    } catch (error) {
+      console.error('Error fetching bikes:', error);
+      setBikes([]);
+      setLoading(false);
+    }
   };
 
   const renderBikeCard = ({ item }: { item: any }) => (
@@ -124,7 +109,6 @@ export default function GarageScreen() {
           </Text>
         </View>
 
-        {/* THE NEW ALERT BADGE */}
         {item.hasAlert && (
           <View style={styles.alertBadge}>
             <Ionicons name="warning" size={12} color="#fff" style={{ marginRight: 4 }} />

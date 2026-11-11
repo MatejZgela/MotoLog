@@ -11,44 +11,47 @@ import {
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Picker } from '@react-native-picker/picker';
-import { supabase } from '../lib/supabase';
 import { useSettings } from '../context/SettingsContext';
 import { Ionicons } from '@expo/vector-icons';
 import {
   scheduleMaintenanceAlert,
   cancelMaintenanceAlert,
-  registerForPushNotificationsAsync, // 🔥 ADDED THIS
+  registerForPushNotificationsAsync,
 } from '../lib/notifications';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
+import {
+  getScheduleById,
+  updateSchedule,
+  getBikeById,
+  getLastServiceLogForTask,
+} from '../lib/database';
 
 export default function EditScheduleScreen() {
   const router = useRouter();
   const { schedId, bikeId } = useLocalSearchParams();
 
-  // 🔥 EXTRACTED alertTime FROM SETTINGS
   const { unit, alertTime } = useSettings();
 
   const [task, setTask] = useState('Engine Oil');
   const [distance, setDistance] = useState('');
   const [days, setDays] = useState('');
+  const [originalDays, setOriginalDays] = useState<string>('');
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     const fetchSchedule = async () => {
-      const { data, error } = await supabase
-        .from('maintenance_schedules')
-        .select('*')
-        .eq('id', schedId)
-        .single();
+      const data = await getScheduleById(schedId as string);
 
-      if (error) {
+      if (!data) {
         Alert.alert('Error', 'Could not load schedule data.');
         router.back();
       } else {
         setTask(data.task_category);
         setDistance(data.interval_distance ? data.interval_distance.toString() : '');
-        setDays(data.interval_days ? data.interval_days.toString() : '');
+        const daysValue = data.interval_days ? data.interval_days.toString() : '';
+        setDays(daysValue);
+        setOriginalDays(daysValue);
       }
       setIsLoading(false);
     };
@@ -65,41 +68,51 @@ export default function EditScheduleScreen() {
     setIsSubmitting(true);
 
     try {
-      const { error } = await supabase
-        .from('maintenance_schedules')
-        .update({
-          task_category: task,
-          interval_distance: distance ? parseInt(distance) : null,
-          interval_days: days ? parseInt(days) : null,
-        })
-        .eq('id', schedId);
-
-      if (error) throw error;
+      await updateSchedule(schedId as string, {
+        task_category: task,
+        interval_distance: distance ? parseInt(distance) : null,
+        interval_days: days ? parseInt(days) : null,
+      });
 
       if (schedId) {
-        if (days) {
-          // 🔥 MAKE SURE WE HAVE PERMISSION BEFORE SCHEDULING
+        // Only reschedule if the interval_days value changed
+        const daysChanged = days !== originalDays;
+
+        if (days && daysChanged) {
           await registerForPushNotificationsAsync();
 
-          const { data: bike } = await supabase
-            .from('motorcycles')
-            .select('make, model')
-            .eq('id', bikeId)
-            .single();
-
+          const bike = await getBikeById(bikeId as string);
           const bikeName = bike ? `${bike.make} ${bike.model}` : 'your bike';
 
-          // 🔥 PASSED alertTime INTO THE FUNCTION
+          // Check if there's a service history for this task
+          const lastService = await getLastServiceLogForTask(bikeId as string, task);
+
+          let daysUntilDue;
+          if (lastService) {
+            // Calculate from last service date
+            const lastServiceDate = new Date(lastService.service_date);
+            const nextDueDate = new Date(lastServiceDate);
+            nextDueDate.setDate(nextDueDate.getDate() + parseInt(days));
+
+            const today = new Date();
+            const diffTime = nextDueDate.getTime() - today.getTime();
+            daysUntilDue = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+          } else {
+            // No service history - schedule from today as upcoming reminder
+            daysUntilDue = parseInt(days);
+          }
+
           await scheduleMaintenanceAlert(
             schedId as string,
             bikeName,
             task,
-            parseInt(days),
+            daysUntilDue,
             alertTime,
           );
-        } else {
+        } else if (!days) {
           await cancelMaintenanceAlert(schedId as string);
         }
+        // If days didn't change, don't reschedule (keep existing notification)
       }
 
       router.back();

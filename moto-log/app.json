@@ -2,6 +2,7 @@
   "expo": {
     "name": "Moto Log",
     "slug": "moto-log",
+    "scheme": "motolog",
     "version": "1.0.0",
     "plugins": [
       [

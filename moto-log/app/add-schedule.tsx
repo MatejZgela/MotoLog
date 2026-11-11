@@ -11,7 +11,6 @@ import {
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Picker } from '@react-native-picker/picker';
-import { supabase } from '../lib/supabase';
 import { useSettings } from '../context/SettingsContext';
 import { Ionicons } from '@expo/vector-icons';
 import {
@@ -20,11 +19,20 @@ import {
   registerForPushNotificationsAsync,
 } from '../lib/notifications';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
+import {
+  getScheduleByBikeAndTask,
+  addSchedule,
+  updateSchedule,
+  getBikeById,
+  getLastServiceLogForTask,
+} from '../lib/database';
+
+import 'react-native-get-random-values';
+import { v4 as uuidv4 } from 'uuid';
 
 export default function AddScheduleScreen() {
   const router = useRouter();
   const { bikeId } = useLocalSearchParams();
-  // 🔥 CHANGED: We are now pulling alertTime from your global settings
   const { unit, alertTime } = useSettings();
 
   const [task, setTask] = useState('Engine Oil');
@@ -41,56 +49,54 @@ export default function AddScheduleScreen() {
     setIsSubmitting(true);
 
     try {
-      const { data: existingSchedule, error: searchError } = await supabase
-        .from('maintenance_schedules')
-        .select('id')
-        .eq('motorcycle_id', bikeId)
-        .eq('task_category', task)
-        .single();
+      const existingSchedule = await getScheduleByBikeAndTask(bikeId as string, task);
 
-      if (searchError && searchError.code !== 'PGRST116') {
-        throw searchError;
-      }
-
-      const payload = {
-        motorcycle_id: bikeId,
+      const scheduleData = {
+        motorcycle_id: bikeId as string,
         task_category: task,
         interval_distance: distance ? parseInt(distance) : null,
         interval_days: days ? parseInt(days) : null,
       };
 
-      let savedScheduleId = existingSchedule?.id;
+      let savedScheduleId;
 
       if (existingSchedule) {
-        const { error: updateError } = await supabase
-          .from('maintenance_schedules')
-          .update(payload)
-          .eq('id', existingSchedule.id);
-
-        if (updateError) throw updateError;
+        await updateSchedule(existingSchedule.id, scheduleData);
+        savedScheduleId = existingSchedule.id;
       } else {
-        const { data: newSchedule, error: insertError } = await supabase
-          .from('maintenance_schedules')
-          .insert([payload])
-          .select()
-          .single();
-
-        if (insertError) throw insertError;
+        const newSchedule = {
+          id: uuidv4(),
+          ...scheduleData,
+          created_at: new Date().toISOString(),
+        };
+        await addSchedule(newSchedule);
         savedScheduleId = newSchedule.id;
       }
 
       if (days && savedScheduleId) {
         await registerForPushNotificationsAsync();
-        const { data: bike } = await supabase
-          .from('motorcycles')
-          .select('make, model')
-          .eq('id', bikeId)
-          .single();
-
+        const bike = await getBikeById(bikeId as string);
         const bikeName = bike ? `${bike.make} ${bike.model}` : 'your bike';
 
-        // 🔥 CHANGED: We are now passing alertTime as the final argument!
-        await scheduleMaintenanceAlert(savedScheduleId, bikeName, task, parseInt(days), alertTime);
+        // Check if there's a service history for this task
+        const lastService = await getLastServiceLogForTask(bikeId as string, task);
+
+        let daysUntilDue;
+        if (lastService) {
+          // Calculate from last service date
+          const lastServiceDate = new Date(lastService.service_date);
+          const nextDueDate = new Date(lastServiceDate);
+          nextDueDate.setDate(nextDueDate.getDate() + parseInt(days));
+
+          const today = new Date();
+          const diffTime = nextDueDate.getTime() - today.getTime();
+          daysUntilDue = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        } else {
+          // No service history - schedule from today as upcoming reminder
+          daysUntilDue = parseInt(days);
+        }
+
+        await scheduleMaintenanceAlert(savedScheduleId, bikeName, task, daysUntilDue, alertTime);
       } else if (savedScheduleId) {
         await cancelMaintenanceAlert(savedScheduleId);
       }

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import {
   View,
   Text,
@@ -14,17 +14,30 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import { Picker } from '@react-native-picker/picker';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { supabase } from '../lib/supabase';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { useSettings } from '../context/SettingsContext';
 import { Ionicons } from '@expo/vector-icons';
-import { scheduleMaintenanceAlert } from '../lib/notifications';
+import {
+  checkAndScheduleAllMaintenanceAlerts,
+  registerForPushNotificationsAsync,
+} from '../lib/notifications';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
+import {
+  addLog,
+  getBikeById,
+  updateBike,
+  getAllSchedules,
+  getLastServiceLogForTask,
+} from '../lib/database';
+import { saveImage } from '../lib/imageStorage';
+import 'react-native-get-random-values';
+
+import { v4 as uuidv4 } from 'uuid';
 
 export default function LogServiceScreen() {
   const router = useRouter();
   const { bikeId } = useLocalSearchParams();
-  const { unit } = useSettings();
+  const { unit, alertTime } = useSettings();
 
   const [task, setTask] = useState('Engine Oil');
   const [odometer, setOdometer] = useState('');
@@ -39,25 +52,6 @@ export default function LogServiceScreen() {
   const [receiptImage, setReceiptImage] = useState<string | null>(null);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isPro, setIsPro] = useState(false); // NEW: Paywall State
-
-  // NEW: Fetch Pro status on mount
-  useEffect(() => {
-    const checkProStatus = async () => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (user) {
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('is_pro')
-          .eq('id', user.id)
-          .single();
-        if (profile) setIsPro(profile.is_pro);
-      }
-    };
-    checkProStatus();
-  }, []);
 
   const handleDateChange = (event: any, selectedDate?: Date) => {
     setShowDatePicker(false);
@@ -65,22 +59,6 @@ export default function LogServiceScreen() {
   };
 
   const handleImagePick = (type: 'before' | 'after' | 'receipt') => {
-    // NEW: Paywall Interceptor
-    if (!isPro) {
-      Alert.alert(
-        'Moto Log Pro Required 🛑',
-        'Attaching photos and receipts is a premium feature.\n\nUpgrade to Pro to keep a complete visual history of your motorcycle!',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          {
-            text: 'Upgrade to Pro',
-            onPress: () => Alert.alert('Coming Soon', 'RevenueCat paywall coming next!'),
-          },
-        ],
-      );
-      return;
-    }
-
     Alert.alert('Add Evidence', 'Choose a photo source', [
       { text: 'Take Photo', onPress: () => openCamera(type) },
       { text: 'Choose from Gallery', onPress: () => openGallery(type) },
@@ -139,93 +117,63 @@ export default function LogServiceScreen() {
     setIsSubmitting(true);
 
     try {
+      const newLogId = uuidv4();
       let beforeUrl = null;
       let afterUrl = null;
       let receiptUrl = null;
 
-      const uploadImage = async (uri: string, prefix: string) => {
-        if (uri.startsWith('http')) return uri;
-
+      const uploadImage = async (uri: string, type: 'before' | 'after' | 'receipt') => {
         const manipResult = await ImageManipulator.manipulateAsync(
           uri,
           [{ resize: { width: 800 } }],
           { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG },
         );
-
-        const response = await fetch(manipResult.uri);
-        const arrayBuffer = await response.arrayBuffer();
-        const fileName = `${bikeId}_${prefix}_${Date.now()}.jpg`;
-
-        const { error } = await supabase.storage
-          .from('maintenance-photos')
-          .upload(fileName, arrayBuffer, { contentType: 'image/jpeg' });
-
-        if (error) throw error;
-
-        const { data: publicData } = supabase.storage
-          .from('maintenance-photos')
-          .getPublicUrl(fileName);
-
-        return publicData.publicUrl;
+        return await saveImage(manipResult.uri, type, bikeId as string, newLogId);
       };
 
       if (beforeImage) beforeUrl = await uploadImage(beforeImage, 'before');
       if (afterImage) afterUrl = await uploadImage(afterImage, 'after');
       if (receiptImage) receiptUrl = await uploadImage(receiptImage, 'receipt');
 
-      const { error: dbError } = await supabase.from('maintenance_logs').insert([
-        {
-          motorcycle_id: bikeId,
-          task_category: task,
-          odometer_at_service: parseInt(odometer),
-          cost: cost ? parseFloat(cost) : null,
-          notes: notes || null,
-          service_date: date.toISOString().split('T')[0],
-          image_before_url: beforeUrl,
-          image_after_url: afterUrl,
-          receipt_image_url: receiptUrl,
-        },
-      ]);
+      const newLog = {
+        id: newLogId,
+        motorcycle_id: bikeId as string,
+        task_category: task,
+        odometer_at_service: parseInt(odometer),
+        cost: cost ? parseFloat(cost) : null,
+        notes: notes || null,
+        service_date: date.toISOString().split('T')[0],
+        image_before_url: beforeUrl,
+        image_after_url: afterUrl,
+        receipt_image_url: receiptUrl,
+        created_at: new Date().toISOString(),
+      };
 
-      if (dbError) throw dbError;
+      await addLog(newLog);
 
-      const { data: bikeData } = await supabase
-        .from('motorcycles')
-        .select('make, model, current_odometer')
-        .eq('id', bikeId)
-        .single();
+      const bike = await getBikeById(bikeId as string);
 
-      if (bikeData && parseInt(odometer) > bikeData.current_odometer) {
-        await supabase
-          .from('motorcycles')
-          .update({ current_odometer: parseInt(odometer) })
-          .eq('id', bikeId);
+      if (bike && parseInt(odometer) > bike.current_odometer) {
+        await updateBike(bikeId as string, { current_odometer: parseInt(odometer) });
       }
 
-      const { data: schedule } = await supabase
-        .from('maintenance_schedules')
-        .select('*')
-        .eq('motorcycle_id', bikeId)
-        .eq('task_category', task)
-        .single();
-
-      if (schedule && schedule.interval_days) {
-        const nextDueDate = new Date(date);
-        nextDueDate.setDate(nextDueDate.getDate() + schedule.interval_days);
-
-        const today = new Date();
-        const diffTime = nextDueDate.getTime() - today.getTime();
-        const daysUntilDue = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-
-        const bikeName = bikeData ? `${bikeData.make} ${bikeData.model}` : 'your bike';
-        await scheduleMaintenanceAlert(schedule.id, bikeName, task, daysUntilDue);
-      }
+      // Check ALL schedules for both time and distance-based notifications
+      await registerForPushNotificationsAsync();
+      const bikeName = bike ? `${bike.make} ${bike.model}` : 'your bike';
+      await checkAndScheduleAllMaintenanceAlerts(
+        bikeId as string,
+        bikeName,
+        parseInt(odometer),
+        getAllSchedules,
+        getLastServiceLogForTask,
+        alertTime,
+      );
 
       Alert.alert('Success!', 'Maintenance logged perfectly.');
       router.back();
     } catch (error: any) {
-      console.error('Upload Error:', error);
-      Alert.alert('Upload Failed', error.message);
+      console.error('Save Error:', error);
+      Alert.alert('Save Failed', error.message);
     } finally {
       setIsSubmitting(false);
     }

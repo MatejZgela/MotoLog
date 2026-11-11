@@ -10,10 +10,11 @@ import {
   Platform,
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import { supabase } from '../lib/supabase';
 import { useSettings } from '../context/SettingsContext';
 import { Ionicons } from '@expo/vector-icons';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
+import { getBikeById, updateBike, deleteBike } from '../lib/database';
+import { deleteAllImagesForBike } from '../lib/imageStorage';
 
 export default function EditBikeScreen() {
   const router = useRouter();
@@ -31,13 +32,9 @@ export default function EditBikeScreen() {
 
   useEffect(() => {
     const fetchBike = async () => {
-      const { data, error } = await supabase
-        .from('motorcycles')
-        .select('*')
-        .eq('id', bikeId)
-        .single();
+      const data = await getBikeById(bikeId as string);
 
-      if (error) {
+      if (!data) {
         Alert.alert('Error', 'Could not load bike data.');
         router.back();
       } else {
@@ -62,18 +59,13 @@ export default function EditBikeScreen() {
     setIsSubmitting(true);
 
     try {
-      const { error } = await supabase
-        .from('motorcycles')
-        .update({
-          nickname: nickname || null,
-          make: make,
-          model: model,
-          year: year ? parseInt(year) : null,
-          current_odometer: parseInt(odometer),
-        })
-        .eq('id', bikeId);
-
-      if (error) throw error;
+      await updateBike(bikeId as string, {
+        nickname: nickname || null,
+        make: make,
+        model: model,
+        year: year ? parseInt(year) : undefined,
+        current_odometer: parseInt(odometer),
+      });
       router.back();
     } catch (error: any) {
       Alert.alert('Error', error.message);
@@ -94,27 +86,8 @@ export default function EditBikeScreen() {
           onPress: async () => {
             try {
               setIsSubmitting(true);
-
-              const { data: logs } = await supabase
-                .from('maintenance_logs')
-                .select('image_before_url, image_after_url, receipt_image_url')
-                .eq('motorcycle_id', bikeId);
-
-              let fileNames: string[] = [];
-              if (logs) {
-                logs.forEach((log) => {
-                  if (log.image_before_url) fileNames.push(log.image_before_url.split('/').pop()!);
-                  if (log.image_after_url) fileNames.push(log.image_after_url.split('/').pop()!);
-                  if (log.receipt_image_url)
-                    fileNames.push(log.receipt_image_url.split('/').pop()!);
-                });
-              }
-
-              if (fileNames.length > 0) {
-                await supabase.storage.from('maintenance-photos').remove(fileNames);
-              }
-
-              await supabase.from('motorcycles').delete().eq('id', bikeId);
+              await deleteAllImagesForBike(bikeId as string);
+              await deleteBike(bikeId as string);
               router.dismissAll();
             } catch (error: any) {
               Alert.alert('Error', error.message);

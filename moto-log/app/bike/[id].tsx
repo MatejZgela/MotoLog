@@ -19,7 +19,9 @@ import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system/legacy';
 import { useSettings } from '../../context/SettingsContext';
-import { supabase } from '../../lib/supabase';
+import { getBikeById, getAllLogs, getAllSchedules, deleteLog, updateBike, deleteSchedule } from '../../lib/database';
+import { getAbsoluteImagePath, deleteImage } from '../../lib/imageStorage';
+import { MaintenanceLog } from '../../types/database';
 
 // --- SUB-COMPONENT: The Expandable Log Card ---
 const LogCardItem = ({ item, unit, onEdit, onDelete, onImageTap }: any) => {
@@ -123,28 +125,28 @@ const LogCardItem = ({ item, unit, onEdit, onDelete, onImageTap }: any) => {
                   {item.image_before_url ? (
                     <TouchableOpacity
                       style={styles.photoWrapper}
-                      onPress={() => onImageTap(item.image_before_url)}
+                      onPress={() => onImageTap(getAbsoluteImagePath(item.image_before_url))}
                     >
                       <Text style={styles.photoLabel}>BEFORE</Text>
-                      <Image source={{ uri: item.image_before_url }} style={styles.logImage} />
+                      <Image source={{ uri: getAbsoluteImagePath(item.image_before_url) }} style={styles.logImage} />
                     </TouchableOpacity>
                   ) : null}
                   {item.image_after_url ? (
                     <TouchableOpacity
                       style={styles.photoWrapper}
-                      onPress={() => onImageTap(item.image_after_url)}
+                      onPress={() => onImageTap(getAbsoluteImagePath(item.image_after_url))}
                     >
                       <Text style={styles.photoLabel}>AFTER</Text>
-                      <Image source={{ uri: item.image_after_url }} style={styles.logImage} />
+                      <Image source={{ uri: getAbsoluteImagePath(item.image_after_url) }} style={styles.logImage} />
                     </TouchableOpacity>
                   ) : null}
                   {item.receipt_image_url ? (
                     <TouchableOpacity
                       style={styles.photoWrapper}
-                      onPress={() => onImageTap(item.receipt_image_url)}
+                      onPress={() => onImageTap(getAbsoluteImagePath(item.receipt_image_url))}
                     >
                       <Text style={styles.photoLabel}>RECEIPT</Text>
-                      <Image source={{ uri: item.receipt_image_url }} style={styles.logImage} />
+                      <Image source={{ uri: getAbsoluteImagePath(item.receipt_image_url) }} style={styles.logImage} />
                     </TouchableOpacity>
                   ) : null}
                 </View>
@@ -209,13 +211,10 @@ export default function BikeProfileScreen() {
   const { unit } = useSettings();
 
   const [bike, setBike] = useState<any>(null);
-  const [logs, setLogs] = useState<any[]>([]);
+  const [logs, setLogs] = useState<MaintenanceLog[]>([]);
   const [schedules, setSchedules] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [fullScreenImage, setFullScreenImage] = useState<string | null>(null);
-
-  // --- NEW: Paywall State ---
-  const [isPro, setIsPro] = useState(false);
 
   // --- SEARCH & SORT STATE ---
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -231,38 +230,16 @@ export default function BikeProfileScreen() {
     return () => clearTimeout(handler);
   }, [searchQuery]);
 
-  // Initial Fetch: Bike, Schedules, AND Profile Status
+  // Initial Fetch: Bike, Schedules
   useFocusEffect(
     useCallback(() => {
       const fetchInitialData = async () => {
         setLoading(true);
 
-        // 1. Get user profile status
-        const {
-          data: { user },
-        } = await supabase.auth.getUser();
-        if (user) {
-          const { data: profile } = await supabase
-            .from('profiles')
-            .select('is_pro')
-            .eq('id', user.id)
-            .single();
-          if (profile) setIsPro(profile.is_pro);
-        }
-
-        // 2. Get Bike
-        const { data: bikeData } = await supabase
-          .from('motorcycles')
-          .select('*')
-          .eq('id', id)
-          .single();
+        const bikeData = await getBikeById(id as string);
         if (bikeData) setBike(bikeData);
 
-        // 3. Get Schedules
-        const { data: schedData } = await supabase
-          .from('maintenance_schedules')
-          .select('*')
-          .eq('motorcycle_id', id);
+        const schedData = await getAllSchedules(id as string);
         if (schedData) setSchedules(schedData);
 
         setLoading(false);
@@ -276,63 +253,51 @@ export default function BikeProfileScreen() {
     if (bike) fetchLogs(true);
   }, [debouncedQuery, sortOrder, bike]);
 
-  const fetchLogs = async (isReset = false) => {
-    if (!isReset && (!hasMoreLogs || isLoadingMore)) return;
+    const fetchLogs = async (isReset = false) => {
+        if (!isReset && (!hasMoreLogs || isLoadingMore)) return;
 
-    setIsLoadingMore(true);
-    const currentLength = isReset ? 0 : logs.length;
+        setIsLoadingMore(true);
+        const currentLength = isReset ? 0 : logs.length;
 
-    let query = supabase
-      .from('maintenance_logs')
-      .select('*')
-      .eq('motorcycle_id', id)
-      .order('service_date', { ascending: sortOrder === 'asc' })
-      .order('created_at', { ascending: sortOrder === 'asc' });
+        let allLogs = await getAllLogs(id as string);
 
-    if (debouncedQuery) {
-      query = query.or(`task_category.ilike.%${debouncedQuery}%,notes.ilike.%${debouncedQuery}%`);
-    }
+        if (debouncedQuery) {
+            const searchTerm = debouncedQuery.toLowerCase();
+            allLogs = allLogs.filter(
+                (log) =>
+                    log.task_category.toLowerCase().includes(searchTerm) ||
+                    (log.notes && log.notes.toLowerCase().includes(searchTerm)),
+            );
+        }
 
-    const { data: nextBatch } = await query.range(currentLength, currentLength + LOGS_PER_PAGE - 1);
+        allLogs.sort((a, b) => {
+            const dateA = new Date(a.service_date).getTime();
+            const dateB = new Date(b.service_date).getTime();
+            if (sortOrder === 'asc') {
+                return dateA - dateB;
+            } else {
+                return dateB - dateA;
+            }
+        });
 
-    if (nextBatch && nextBatch.length > 0) {
-      setLogs(isReset ? nextBatch : (prev) => [...prev, ...nextBatch]);
-      setHasMoreLogs(nextBatch.length === LOGS_PER_PAGE);
-    } else {
-      if (isReset) setLogs([]);
-      setHasMoreLogs(false);
-    }
+        const nextBatch = allLogs.slice(currentLength, currentLength + LOGS_PER_PAGE);
 
-    setIsLoadingMore(false);
-  };
+        if (nextBatch && nextBatch.length > 0) {
+            setLogs(isReset ? nextBatch : (prev) => [...prev, ...nextBatch]);
+            setHasMoreLogs(allLogs.length > currentLength + LOGS_PER_PAGE);
+        } else {
+            if (isReset) setLogs([]);
+            setHasMoreLogs(false);
+        }
+
+        setIsLoadingMore(false);
+    };
 
   const generatePDF = async () => {
-    // --- NEW: Paywall Interceptor ---
-    if (!isPro) {
-      Alert.alert(
-        'Moto Log Pro Required 🛑',
-        'Exporting your service history to PDF is a premium feature.\n\nUpgrade to Pro to generate professional, shareable reports for buyers or your own records!',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          {
-            text: 'Upgrade to Pro',
-            onPress: () => Alert.alert('Coming Soon', 'RevenueCat paywall coming next!'),
-          },
-        ],
-      );
-      return;
-    }
-
     try {
       setIsLoadingMore(true);
 
-      const { data: allLogs, error } = await supabase
-        .from('maintenance_logs')
-        .select('*')
-        .eq('motorcycle_id', id)
-        .order('service_date', { ascending: false });
-
-      if (error) throw error;
+      const allLogs = await getAllLogs(id as string);
 
       if (!allLogs || allLogs.length === 0) {
         Alert.alert('No Data', 'There are no logs to export.');
@@ -473,31 +438,18 @@ export default function BikeProfileScreen() {
 
     // 3. The Deletion Engine
     const performDelete = async (rollbackOdometerTo: number | null) => {
-      // A. Delete Photos from Storage
-      const urls = [log.image_before_url, log.image_after_url, log.receipt_image_url].filter(
-        Boolean,
-      );
-      if (urls.length > 0) {
-        const fileNames = urls.map((url) => url.split('/').pop());
-        await supabase.storage.from('maintenance-photos').remove(fileNames);
-      }
+        if (log.image_before_url) await deleteImage(log.image_before_url);
+        if (log.image_after_url) await deleteImage(log.image_after_url);
+        if (log.receipt_image_url) await deleteImage(log.receipt_image_url);
 
-      // B. Delete the Log from Database
-      await supabase.from('maintenance_logs').delete().eq('id', log.id);
+        await deleteLog(log.id);
 
-      // C. Rollback the Bike's Odometer (If the user requested it)
-      if (rollbackOdometerTo !== null) {
-        await supabase
-          .from('motorcycles')
-          .update({ current_odometer: rollbackOdometerTo })
-          .eq('id', bike.id);
+        if (rollbackOdometerTo !== null) {
+            await updateBike(bike.id, { current_odometer: rollbackOdometerTo });
+            setBike({ ...bike, current_odometer: rollbackOdometerTo });
+        }
 
-        // Update local state instantly so the UI doesn't lag
-        setBike({ ...bike, current_odometer: rollbackOdometerTo });
-      }
-
-      // Refresh the list
-      fetchLogs(true);
+        fetchLogs(true);
     };
 
     // 4. The Logic Tree
@@ -519,6 +471,8 @@ export default function BikeProfileScreen() {
           },
         ],
       );
+    } else {
+        performDelete(null);
     }
   };
 
@@ -529,11 +483,8 @@ export default function BikeProfileScreen() {
         text: 'Delete',
         style: 'destructive',
         onPress: async () => {
-          await supabase.from('maintenance_schedules').delete().eq('id', schedId);
-          const { data: schedData } = await supabase
-            .from('maintenance_schedules')
-            .select('*')
-            .eq('motorcycle_id', id);
+          await deleteSchedule(schedId);
+          const schedData = await getAllSchedules(id as string);
           setSchedules(schedData || []);
         },
       },
@@ -565,8 +516,6 @@ export default function BikeProfileScreen() {
 
     // 2. Calculate Time
     if (schedule.interval_days) {
-      // 🔥 BUG FIX: Explicitly sort by date descending to ensure we ALWAYS get the newest log,
-      // even if the user changed the global sort order to "OLDEST" on the UI!
       const sortedByDate = [...relatedLogs].sort(
         (a, b) => new Date(b.service_date).getTime() - new Date(a.service_date).getTime(),
       );
@@ -584,23 +533,18 @@ export default function BikeProfileScreen() {
     const timeOverdue = daysLeft !== null && daysLeft <= 0;
     const isOverdue = distOverdue || timeOverdue;
 
-    // OVERDUE STATES
     if (isOverdue) {
       if (distOverdue && timeOverdue) {
-        // State 3: Both are overdue
         return {
           text: `OVERDUE by ${Math.abs(milesLeft!)} ${unit} & ${Math.abs(daysLeft!)} days`,
           color: '#ff4444',
         };
       } else if (distOverdue) {
-        // State 1: Only distance is overdue
         return { text: `OVERDUE by ${Math.abs(milesLeft!)} ${unit}`, color: '#ff4444' };
       } else {
-        // State 2: Only time is overdue
         return { text: `OVERDUE by ${Math.abs(daysLeft!)} days`, color: '#ff4444' };
       }
     }
-    // HEALTHY STATES
     else {
       if (milesLeft !== null && daysLeft !== null) {
         return { text: `Due in ${milesLeft} ${unit} or ${daysLeft} days`, color: '#4CAF50' };

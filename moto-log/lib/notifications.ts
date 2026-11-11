@@ -65,7 +65,10 @@ export async function scheduleMaintenanceAlert(
 
     await cancelMaintenanceAlert(scheduleId);
 
-    if (daysUntilDue <= 0) return;
+    // If overdue, schedule for tomorrow instead of skipping
+    if (daysUntilDue <= 0) {
+      daysUntilDue = 1;
+    }
 
     // 1. The Primary Alert (using custom time)
     const primaryTrigger = new Date();
@@ -113,5 +116,71 @@ export async function cancelMaintenanceAlert(scheduleId: string) {
     await Notifications.cancelScheduledNotificationAsync(`nag_${scheduleId}`);
   } catch (error) {
     console.error('Failed to cancel notification:', error);
+  }
+}
+
+export async function checkAndScheduleAllMaintenanceAlerts(
+  bikeId: string,
+  bikeName: string,
+  currentOdometer: number,
+  getAllSchedulesFunc: (bikeId: string) => any[],
+  getLastServiceLogForTaskFunc: (bikeId: string, task: string) => any | null,
+  preferredTime: { hour: number; minute: number },
+) {
+  try {
+    const schedules = getAllSchedulesFunc(bikeId);
+
+    for (const schedule of schedules) {
+      const lastService = getLastServiceLogForTaskFunc(bikeId, schedule.task_category);
+
+      if (!lastService) {
+        // No service history - skip for now (will be scheduled when first service is logged)
+        continue;
+      }
+
+      let shouldSchedule = false;
+      let daysUntilDue = Infinity;
+
+      // Check distance-based interval
+      if (schedule.interval_distance) {
+        const milesSinceService = currentOdometer - lastService.odometer_at_service;
+        const milesLeft = schedule.interval_distance - milesSinceService;
+
+        if (milesLeft <= 0) {
+          // Distance threshold reached or exceeded - schedule ASAP
+          shouldSchedule = true;
+          daysUntilDue = 1; // Tomorrow
+        }
+      }
+
+      // Check time-based interval (whichever comes first)
+      if (schedule.interval_days) {
+        const lastServiceDate = new Date(lastService.service_date);
+        const nextDueDate = new Date(lastServiceDate);
+        nextDueDate.setDate(nextDueDate.getDate() + schedule.interval_days);
+
+        const today = new Date();
+        const diffTime = nextDueDate.getTime() - today.getTime();
+        const calculatedDaysUntilDue = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+        // Use whichever comes first (time or distance)
+        if (calculatedDaysUntilDue < daysUntilDue) {
+          daysUntilDue = calculatedDaysUntilDue;
+          shouldSchedule = true;
+        }
+      }
+
+      if (shouldSchedule && daysUntilDue !== Infinity) {
+        await scheduleMaintenanceAlert(
+          schedule.id,
+          bikeName,
+          schedule.task_category,
+          daysUntilDue,
+          preferredTime,
+        );
+      }
+    }
+  } catch (error) {
+    console.error('Failed to check and schedule maintenance alerts:', error);
   }
 }
